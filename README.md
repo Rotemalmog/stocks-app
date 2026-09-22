@@ -54,9 +54,10 @@ Google Sheet  ──  _Quotes tab runs GOOGLEFINANCE()
    …or paste each file in `src/` into the editor by hand (`.gs` as script files,
    `styles.html` / `index.html` / `app.js.html` as HTML files named `styles`,
    `index` and `app.js`).
-3. **Run `setup()`** once from the editor. It creates the spreadsheet, all tabs,
-   seeds the watchlist, and stores the spreadsheet id in Script Properties.
-   `getSpreadsheetUrl()` prints the link.
+3. **Run `setup()`** once from the editor. It creates the spreadsheet and all
+   tabs and stores the spreadsheet id in Script Properties.
+   `getSpreadsheetUrl()` prints the link. The watchlist starts empty by design
+   (see *Public repo* below) — add your tickers with the **+** button.
 4. **Run `probeCoverage()`** — see below. Do this before trusting any ticker.
 5. **Run `installDailyTrigger()`** to start accumulating price history.
 6. **Deploy** → New deployment → Web app → *Execute as: Me*, *Who has access:
@@ -64,10 +65,19 @@ Google Sheet  ──  _Quotes tab runs GOOGLEFINANCE()
 
 ## Run `probeCoverage()` first
 
-`GOOGLEFINANCE` coverage is unreliable for recent listings. `SPCX` in particular
-listed only in June 2026. The probe logs which of `INTC / GOOGL / TSLA / SPCX /
-QBTS` actually resolve, plus the USD/ILS rate. `ZZZZ` is included deliberately
-and is *expected* to fail — it exercises the stale-data path.
+`GOOGLEFINANCE` coverage is unreliable for recent listings, so confirm your
+symbols resolve before trusting any number.
+
+With no argument, `probeCoverage()` probes whatever is actually in your
+`Positions` and `Watchlist` tabs and reports the USD/ILS rate. Pass an array to
+check specific symbols before adding them:
+
+```js
+probeCoverage(['SPCX'])   // a June 2026 listing - worth checking explicitly
+```
+
+`ZZZZ` is always appended and is *expected* to fail — it exercises the
+stale-data path rather than indicating a problem.
 
 Anything `GOOGLEFINANCE` cannot serve can still be added (the UI offers
 "add it anyway"); it shows a `stale` pill and falls back to the last known price
@@ -119,6 +129,18 @@ only up to ~6 segments), every slice is value-labelled in the legend so identity
 never rests on colour alone, slices carry a 2px surface gap, and the positions
 table serves as the table view. Dark mode is a selected set of steps for the dark
 surface, not an automatic flip.
+
+## Public repo
+
+This repository is public, so it deliberately contains **no personal financial
+data**. Positions, cost basis and watchlist all live in your private Google
+Sheet, never in git. `SEED_WATCHLIST` is empty and `probeCoverage()` reads from
+the Sheet rather than hardcoding symbols, so the code does not disclose what its
+owner follows. The demo fixtures in `dev/` are generic and invented.
+
+The ticker maps in `Config.gs` (themes, Taiwan exposure, aliases, suggested risk
+tags) are general reference data covering ~60 symbols and say nothing about any
+particular holding.
 
 ## Not financial advice
 

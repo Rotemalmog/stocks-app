@@ -85,6 +85,7 @@ function seedSettings_(ss) {
 }
 
 function seedWatchlist_(ss) {
+  if (!SEED_WATCHLIST.length) return;
   var sh = ss.getSheetByName(SHEETS.WATCHLIST);
   if (sh.getLastRow() > 1) return;
   var today = new Date();

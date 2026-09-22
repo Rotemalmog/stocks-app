@@ -151,4 +151,9 @@ var DEFAULT_SETTINGS = {
   maxTop3Pct: 0.60
 };
 
-var SEED_WATCHLIST = ['INTC', 'GOOGL', 'TSLA', 'SPCX', 'QBTS'];
+/**
+ * Tickers to seed a brand-new Watchlist with. Deliberately empty: this repo is
+ * public, and a hardcoded list would advertise what its owner follows.
+ * Add your own via the + button after deploying.
+ */
+var SEED_WATCHLIST = [];

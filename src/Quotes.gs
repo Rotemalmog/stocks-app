@@ -118,11 +118,39 @@ function isFiniteNumber_(v) {
 
 /**
  * Step 0 coverage probe. Run from the editor before trusting any ticker.
- * Confirms which symbols GOOGLEFINANCE actually serves — SPCX in particular,
- * which listed in June 2026 and may not be covered yet.
+ *
+ * With no argument it probes whatever is actually in your Positions and
+ * Watchlist tabs, so nothing about your holdings is hardcoded in this file.
+ * Pass an array to probe specific symbols instead, e.g.
+ *   probeCoverage(['SPCX'])
+ * which is worth doing for very recent listings, where coverage is unreliable.
+ *
+ * ZZZZ is always appended and is EXPECTED to fail - it verifies the
+ * stale-data path rather than indicating a problem.
+ *
+ * @param {string[]=} tickers optional explicit list
  */
-function probeCoverage() {
-  var probe = ['INTC', 'GOOGL', 'TSLA', 'SPCX', 'QBTS', 'ZZZZ'];
+function probeCoverage(tickers) {
+  var probe = (tickers && tickers.length)
+    ? tickers.map(normalizeTicker)
+    : getPositions_().map(function (p) { return p.ticker; })
+        .concat(getWatchlist_().map(function (w) { return w.ticker; }));
+
+  var seen = {};
+  probe = probe.filter(function (t) {
+    if (!t || seen[t]) return false;
+    seen[t] = true;
+    return true;
+  });
+
+  if (!probe.length) {
+    var hint = 'Nothing to probe - add a stock first, or pass symbols directly: ' +
+               "probeCoverage(['INTC'])";
+    Logger.log(hint);
+    return hint;
+  }
+  probe.push('ZZZZ');
+
   var res = fetchQuotes_(probe);
   var lines = ['--- GOOGLEFINANCE coverage probe ---'];
 
@@ -136,7 +164,7 @@ function probeCoverage() {
     );
   });
   lines.push('USD/ILS: ' + (res.usdIls === null ? 'NOT COVERED' : res.usdIls));
-  lines.push('ZZZZ is expected to fail — it verifies the stale-data path.');
+  lines.push('ZZZZ is expected to fail - it verifies the stale-data path.');
 
   var out = lines.join('\n');
   Logger.log(out);

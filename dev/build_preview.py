@@ -24,33 +24,36 @@ MOCK = """
 <script>
 /* ---- mock server layer: fixtures + the real logic above ---- */
 var MOCK_POSITIONS = [
-  // The hand-checkable case from the plan: 10 @ $100 cost, $122 price
+  // Generic demo fixtures - this repo is public, so they deliberately do not
+  // mirror anyone's real holdings. They exist to exercise every code path:
+  // profitable mega-cap, high-Taiwan semi, unprofitable speculative, and a
+  // broken ticker with an ILS cost basis.
+  //
+  // INTC is the hand-checkable case: 10 @ $100 cost, $122 price
   // => value 1220, P&L +220, +22.0%
-  {ticker:'INTC',  shares:10,  avgCost:100, costCurrency:'USD', buyDate:'2026-01-15', riskTag:'growth',      notes:'18A turnaround'},
-  {ticker:'GOOGL', shares:5,   avgCost:250, costCurrency:'USD', buyDate:'2025-06-02', riskTag:'core',        notes:''},
-  {ticker:'TSLA',  shares:8,   avgCost:300, costCurrency:'USD', buyDate:'2025-11-20', riskTag:'growth',      notes:''},
-  {ticker:'SPCX',  shares:12,  avgCost:140, costCurrency:'USD', buyDate:'2026-06-12', riskTag:'growth',      notes:'IPO allocation'},
-  {ticker:'QBTS',  shares:100, avgCost:12,  costCurrency:'USD', buyDate:'2026-03-01', riskTag:'speculative', notes:''},
-  // Junk ticker on purpose: exercises the stale-data fallback path.
-  {ticker:'ZZZZ',  shares:5,   avgCost:50,  costCurrency:'ILS', buyDate:'2026-02-01', riskTag:'speculative', notes:'broken on purpose'}
+  {ticker:'INTC', shares:10,  avgCost:100, costCurrency:'USD', buyDate:'2026-01-15', riskTag:'growth',      notes:'foundry turnaround'},
+  {ticker:'MSFT', shares:4,   avgCost:380, costCurrency:'USD', buyDate:'2025-06-02', riskTag:'core',        notes:''},
+  {ticker:'NVDA', shares:9,   avgCost:120, costCurrency:'USD', buyDate:'2025-11-20', riskTag:'growth',      notes:''},
+  {ticker:'IONQ', shares:150, avgCost:9,   costCurrency:'USD', buyDate:'2026-03-01', riskTag:'speculative', notes:''},
+  // Junk ticker on purpose: exercises the stale-data fallback and ILS cost basis.
+  {ticker:'ZZZZ', shares:5,   avgCost:50,  costCurrency:'ILS', buyDate:'2026-02-01', riskTag:'speculative', notes:'broken on purpose'}
 ];
 
 var MOCK_WATCHLIST = [
-  {ticker:'NVDA', addedDate:'2026-09-01', thesis:'AI accelerators', targetEntry:150},
-  {ticker:'TSM',  addedDate:'2026-09-01', thesis:'The chokepoint',  targetEntry:200},
-  {ticker:'MSFT', addedDate:'2026-09-10', thesis:'',                targetEntry:null}
+  {ticker:'TSM',  addedDate:'2026-09-01', thesis:'The chokepoint',    targetEntry:200},
+  {ticker:'AMD',  addedDate:'2026-09-01', thesis:'',                  targetEntry:140},
+  {ticker:'AVGO', addedDate:'2026-09-10', thesis:'Custom silicon',    targetEntry:null}
 ];
 
 var MOCK_QUOTES = {
-  INTC:  {ticker:'INTC', name:'Intel Corporation',    price:122.00, changepct:1.8,  high52:135.0, low52:18.9,  pe:41.2,  eps:2.96, marketcap:5.3e11, beta:1.4,  currency:'USD', stale:false},
-  GOOGL: {ticker:'GOOGL',name:'Alphabet Inc Class A', price:310.00, changepct:-0.4, high52:330.0, low52:190.0, pe:27.1,  eps:11.4, marketcap:3.8e12, beta:1.0,  currency:'USD', stale:false},
-  TSLA:  {ticker:'TSLA', name:'Tesla Inc',            price:420.00, changepct:2.6,  high52:490.0, low52:210.0, pe:98.4,  eps:4.27, marketcap:1.4e12, beta:2.1,  currency:'USD', stale:false},
-  SPCX:  {ticker:'SPCX', name:'Space Exploration Technologies', price:152.35, changepct:-1.7, high52:225.64, low52:104.83, pe:null, eps:null, marketcap:2.07e12, beta:null, currency:'USD', stale:false},
-  QBTS:  {ticker:'QBTS', name:'D-Wave Quantum Inc',   price:17.85,  changepct:3.2,  high52:24.1,  low52:5.6,   pe:-24.98,eps:-0.71,marketcap:6.72e9, beta:2.8,  currency:'USD', stale:false},
-  ZZZZ:  {ticker:'ZZZZ', name:null, price:null, changepct:null, high52:null, low52:null, pe:null, eps:null, marketcap:null, beta:null, currency:null, stale:true},
-  NVDA:  {ticker:'NVDA', name:'NVIDIA Corporation',   price:178.40, changepct:0.9,  high52:212.0, low52:86.0,  pe:52.3,  eps:3.41, marketcap:4.4e12, beta:1.7,  currency:'USD', stale:false},
-  TSM:   {ticker:'TSM',  name:'Taiwan Semiconductor', price:243.10, changepct:-0.6, high52:260.0, low52:140.0, pe:31.8,  eps:7.64, marketcap:1.26e12,beta:1.2,  currency:'USD', stale:false},
-  MSFT:  {ticker:'MSFT', name:'Microsoft Corporation',price:512.30, changepct:0.3,  high52:560.0, low52:380.0, pe:36.0,  eps:14.2, marketcap:3.8e12, beta:0.9,  currency:'USD', stale:false}
+  INTC: {ticker:'INTC', name:'Intel Corporation',     price:122.00, changepct:1.8,  high52:135.0, low52:18.9,  pe:41.2,   eps:2.96,  marketcap:5.3e11, beta:1.4, currency:'USD', stale:false},
+  MSFT: {ticker:'MSFT', name:'Microsoft Corporation', price:512.30, changepct:0.3,  high52:560.0, low52:380.0, pe:36.0,   eps:14.2,  marketcap:3.8e12, beta:0.9, currency:'USD', stale:false},
+  NVDA: {ticker:'NVDA', name:'NVIDIA Corporation',    price:178.40, changepct:0.9,  high52:212.0, low52:86.0,  pe:52.3,   eps:3.41,  marketcap:4.4e12, beta:1.7, currency:'USD', stale:false},
+  IONQ: {ticker:'IONQ', name:'IonQ Inc',              price:14.20,  changepct:3.2,  high52:22.4,  low52:6.1,   pe:-31.40, eps:-0.45, marketcap:4.1e9,  beta:2.6, currency:'USD', stale:false},
+  ZZZZ: {ticker:'ZZZZ', name:null, price:null, changepct:null, high52:null, low52:null, pe:null, eps:null, marketcap:null, beta:null, currency:null, stale:true},
+  TSM:  {ticker:'TSM',  name:'Taiwan Semiconductor',  price:243.10, changepct:-0.6, high52:260.0, low52:140.0, pe:31.8,   eps:7.64,  marketcap:1.26e12,beta:1.2, currency:'USD', stale:false},
+  AMD:  {ticker:'AMD',  name:'Advanced Micro Devices',price:165.90, changepct:-1.1, high52:198.0, low52:94.0,  pe:78.5,   eps:2.11,  marketcap:2.7e11, beta:1.9, currency:'USD', stale:false},
+  AVGO: {ticker:'AVGO', name:'Broadcom Inc',          price:389.40, changepct:1.4,  high52:420.0, low52:210.0, pe:44.2,   eps:8.81,  marketcap:1.8e12, beta:1.1, currency:'USD', stale:false}
 };
 
 var MOCK_USDILS = 3.72;
