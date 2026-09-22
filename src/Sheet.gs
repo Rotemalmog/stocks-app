@@ -27,13 +27,47 @@ function setup() {
   seedSettings_(ss);
   seedWatchlist_(ss);
 
-  // Remove the default empty "Sheet1" a new spreadsheet ships with.
-  var def = ss.getSheetByName('Sheet1');
-  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+  removeDefaultSheet_(ss);
+  orderTabs_(ss);
 
   var url = ss.getUrl();
   Logger.log('Spreadsheet ready: ' + url);
   return url;
+}
+
+/**
+ * Drop the empty sheet a new spreadsheet ships with.
+ *
+ * Its name is locale-dependent - "Sheet1" in English, "גיליון1" in Hebrew,
+ * "Feuille1" in French and so on - so matching by name does not work. Instead
+ * delete any sheet that is not one of ours AND is completely empty, which is
+ * locale-independent and can never touch real data.
+ */
+function removeDefaultSheet_(ss) {
+  var known = {};
+  [SHEETS.POSITIONS, SHEETS.WATCHLIST, SHEETS.QUOTES, SHEETS.HISTORY, SHEETS.SETTINGS]
+    .forEach(function (n) { known[n] = true; });
+
+  ss.getSheets().forEach(function (sh) {
+    if (known[sh.getName()]) return;
+    if (ss.getSheets().length <= 1) return;           // never delete the last sheet
+    if (sh.getLastRow() === 0 && sh.getLastColumn() === 0) {
+      ss.deleteSheet(sh);
+    }
+  });
+}
+
+/** Put the tabs in a sensible reading order, Positions first. */
+function orderTabs_(ss) {
+  [SHEETS.POSITIONS, SHEETS.WATCHLIST, SHEETS.HISTORY, SHEETS.SETTINGS]
+    .forEach(function (name, i) {
+      var sh = ss.getSheetByName(name);
+      if (!sh) return;
+      ss.setActiveSheet(sh);
+      ss.moveActiveSheet(i + 1);
+    });
+  var first = ss.getSheetByName(SHEETS.POSITIONS);
+  if (first) ss.setActiveSheet(first);
 }
 
 /** Resolve the backing spreadsheet, creating it on first run. */
