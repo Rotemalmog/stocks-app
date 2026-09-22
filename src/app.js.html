@@ -1,0 +1,446 @@
+<script>
+/* ------------------------------------------------------------------
+ * Front-end. One RPC (getDashboardData) renders everything; each
+ * mutation returns fresh dashboard data so we never round-trip twice.
+ * ------------------------------------------------------------------ */
+
+var state = { data: null, list: 'watchlist', busy: false };
+var charts = { positions: null, themes: null };
+
+var MAX_SLICES = 6;   // part-to-whole reads at a glance only up to ~6 segments
+
+/** Promise wrapper around the callback-based google.script.run. */
+function rpc(fn) {
+  var args = Array.prototype.slice.call(arguments, 1);
+  return new Promise(function (resolve, reject) {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(function (e) { reject(new Error(e && e.message ? e.message : String(e))); })
+      [fn].apply(null, args);
+  });
+}
+
+function $(id) { return document.getElementById(id); }
+
+function seriesColors() {
+  var cs = getComputedStyle(document.documentElement);
+  var out = [];
+  for (var i = 1; i <= 8; i++) out.push(cs.getPropertyValue('--s' + i).trim());
+  return out;
+}
+function cssVar(name) {
+  return getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+}
+
+/* ---------------- formatting ---------------- */
+
+function ccySymbol(c) { return c === 'ILS' ? '₪' : '$'; }
+
+function money(v, c) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  var abs = Math.abs(v);
+  var digits = abs < 100 ? 2 : 0;
+  return (v < 0 ? '-' : '') + ccySymbol(c) +
+    abs.toLocaleString('en-US', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+}
+function signedMoney(v, c) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v > 0 ? '+' : '') + money(v, c);
+}
+function pct(v, digits) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v * 100).toFixed(digits === undefined ? 1 : digits) + '%';
+}
+function signedPct(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  return (v > 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
+}
+function compact(v) {
+  if (v === null || v === undefined || isNaN(v)) return '—';
+  var units = [[1e12, 'T'], [1e9, 'B'], [1e6, 'M'], [1e3, 'K']];
+  for (var i = 0; i < units.length; i++) {
+    if (Math.abs(v) >= units[i][0]) return '$' + (v / units[i][0]).toFixed(2) + units[i][1];
+  }
+  return '$' + v.toFixed(0);
+}
+function dirClass(v) {
+  if (v === null || v === undefined || isNaN(v) || v === 0) return '';
+  return v > 0 ? 'up' : 'down';
+}
+function esc(s) {
+  return String(s === null || s === undefined ? '' : s)
+    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/* ---------------- load & render ---------------- */
+
+function setBusy(b) {
+  state.busy = b;
+  $('btnRefresh').disabled = b;
+  $('btnAdd').disabled = b;
+  if (b) $('stamp').textContent = 'refreshing…';
+}
+
+function load() {
+  setBusy(true);
+  return rpc('getDashboardData')
+    .then(render)
+    .catch(function (e) {
+      $('notices').innerHTML = notice('danger', 'Could not load: ' + esc(e.message) +
+        ' — if this is the first run, open the Apps Script editor and run setup().');
+      $('stamp').textContent = 'error';
+    })
+    .then(function () { setBusy(false); });
+}
+
+function render(data) {
+  state.data = data;
+  var c = data.settings.displayCurrency;
+
+  $('stamp').textContent = data.fetchedAt + '  ·  ' + (data.elapsedMs / 1000).toFixed(1) + 's' +
+    (data.usdIls ? '  ·  USD/ILS ' + data.usdIls.toFixed(3) : '');
+
+  $('heroValue').textContent = money(data.totals.marketValue, c);
+  $('heroCost').textContent = money(data.totals.costBasis, c);
+
+  var pnl = $('heroPnl');
+  pnl.textContent = signedMoney(data.totals.pnl, c) + '  (' + signedPct(data.totals.pnlPct) + ')';
+  pnl.className = 'stat-value ' + dirClass(data.totals.pnl);
+
+  var day = $('heroDay');
+  day.textContent = signedMoney(data.totals.dayChange, c) + '  (' + signedPct(data.totals.dayChangePct) + ')';
+  day.className = 'stat-value ' + dirClass(data.totals.dayChange);
+
+  $('ccyUSD').setAttribute('aria-pressed', String(c === 'USD'));
+  $('ccyILS').setAttribute('aria-pressed', String(c === 'ILS'));
+
+  renderNotices(data.analytics.warnings);
+  renderPositions(data, c);
+  renderCharts(data, c);
+  renderWatchlist(data, c);
+  renderRisk(data);
+}
+
+function notice(level, html) {
+  var ico = level === 'danger' ? '!' : (level === 'warn' ? '!' : 'i');
+  return '<div class="notice ' + level + '"><span class="ico">' + ico + '</span><span>' + html + '</span></div>';
+}
+
+function renderNotices(warnings) {
+  $('notices').innerHTML = (warnings || []).map(function (w) {
+    return notice(w.level, esc(w.text));
+  }).join('');
+}
+
+function renderPositions(data, c) {
+  var rows = data.positions;
+  $('pfCount').textContent = rows.length
+    ? rows.length + ' position' + (rows.length === 1 ? '' : 's')
+    : '';
+  $('pfEmpty').classList.toggle('hidden', rows.length > 0);
+
+  $('pfBody').innerHTML = rows.map(function (r) {
+    return '<tr>' +
+      '<td><span class="tk">' + esc(r.ticker) + '</span>' +
+        (r.stale ? ' <span class="pill stale">stale</span>' : '') +
+        '<div class="co">' + esc(r.name) + '</div></td>' +
+      '<td>' + r.shares.toLocaleString('en-US') + '</td>' +
+      '<td>' + money(r.avgCost, r.costCurrency) + '</td>' +
+      '<td>' + (r.price === null ? '—' : money(r.price, 'USD')) + '</td>' +
+      '<td class="' + dirClass(r.changePct) + '">' + signedPct(r.changePct) + '</td>' +
+      '<td>' + money(r.marketValue, c) + '</td>' +
+      '<td class="' + dirClass(r.pnl) + '">' + signedMoney(r.pnl, c) + '</td>' +
+      '<td class="' + dirClass(r.pnlPct) + '">' + signedPct(r.pnlPct) + '</td>' +
+      '<td>' + pct(r.weight) + '</td>' +
+      '<td><span class="pill">' + esc(r.riskTag) + '</span></td>' +
+      '<td><button class="btn-danger" data-remove="positions" data-ticker="' + esc(r.ticker) + '">Remove</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+/** Collapse a weighted list to at most MAX_SLICES entries plus "Other". */
+function topSlices(items) {
+  // Zero-weight entries (a position with no live price) would render as an
+  // empty 0% slice, so they are dropped from the chart but stay in the table.
+  var sorted = items.slice()
+    .filter(function (x) { return x.weight > 0; })
+    .sort(function (a, b) { return b.weight - a.weight; });
+  if (sorted.length <= MAX_SLICES) return sorted;
+  var head = sorted.slice(0, MAX_SLICES - 1);
+  var tail = sorted.slice(MAX_SLICES - 1);
+  head.push({
+    key: 'Other (' + tail.length + ')',
+    weight: tail.reduce(function (a, x) { return a + x.weight; }, 0)
+  });
+  return head;
+}
+
+function drawPie(canvasId, legendId, items, c) {
+  var slices = topSlices(items);
+  var colors = seriesColors();
+  var surface = cssVar('--surface');
+  var total = state.data.totals.marketValue;
+
+  var cfg = {
+    type: 'doughnut',
+    data: {
+      labels: slices.map(function (s) { return s.key; }),
+      datasets: [{
+        data: slices.map(function (s) { return +(s.weight * 100).toFixed(2); }),
+        backgroundColor: slices.map(function (_, i) { return colors[i % colors.length]; }),
+        borderColor: surface,
+        borderWidth: 2,
+        hoverOffset: 6
+      }]
+    },
+    options: {
+      responsive: true,
+      maintainAspectRatio: false,
+      cutout: '58%',
+      plugins: {
+        legend: { display: false },
+        tooltip: {
+          callbacks: {
+            label: function (ctx) {
+              var w = ctx.parsed / 100;
+              return ' ' + ctx.label + '  ' + pct(w) +
+                (total ? '  ·  ' + money(total * w, c) : '');
+            }
+          }
+        }
+      }
+    }
+  };
+
+  if (charts[canvasId]) charts[canvasId].destroy();
+  charts[canvasId] = new Chart($(canvasId).getContext('2d'), cfg);
+
+  // The legend doubles as the direct-label layer: identity never rests on colour alone.
+  $(legendId).innerHTML = slices.map(function (s, i) {
+    return '<li>' +
+      '<span class="swatch" style="background:' + colors[i % colors.length] + '"></span>' +
+      '<span class="name">' + esc(s.key) + '</span>' +
+      '<span class="val">' + pct(s.weight) +
+        (total ? '  ·  ' + money(total * s.weight, c) : '') + '</span>' +
+      '</li>';
+  }).join('');
+}
+
+function renderCharts(data, c) {
+  if (!data.positions.length) {
+    ['piePositions', 'pieThemes'].forEach(function (id) {
+      if (charts[id]) { charts[id].destroy(); charts[id] = null; }
+    });
+    $('legendPositions').innerHTML = '';
+    $('legendThemes').innerHTML = '';
+    return;
+  }
+  drawPie('piePositions', 'legendPositions',
+    data.positions.map(function (r) { return { key: r.ticker, weight: r.weight }; }), c);
+  drawPie('pieThemes', 'legendThemes', data.analytics.themes, c);
+}
+
+function renderWatchlist(data, c) {
+  var rows = data.watchlist;
+  $('wlEmpty').classList.toggle('hidden', rows.length > 0);
+
+  $('wlBody').innerHTML = rows.map(function (w) {
+    var band = w.range52 === null ? '—'
+      : pct(w.range52, 0) + ' of 52w range';
+    return '<tr>' +
+      '<td><span class="tk">' + esc(w.ticker) + '</span>' +
+        (w.stale ? ' <span class="pill stale">stale</span>' : '') +
+        '<div class="co">' + esc(w.name) + '</div></td>' +
+      '<td>' + (w.price === null ? '—' : money(w.priceDisplay, c)) + '</td>' +
+      '<td class="' + dirClass(w.changePct) + '">' + signedPct(w.changePct) + '</td>' +
+      '<td>' + band + '</td>' +
+      '<td>' + (w.targetEntry ? money(w.targetEntry, 'USD') : '—') + '</td>' +
+      '<td class="' + (w.toTarget === null ? '' : (w.toTarget <= 0 ? 'up' : '')) + '">' +
+        (w.toTarget === null ? '—' : signedPct(w.toTarget)) + '</td>' +
+      '<td>' + (w.pe === null ? '—' : w.pe.toFixed(1)) + '</td>' +
+      '<td><span class="pill">' + esc(w.theme) + '</span></td>' +
+      '<td><button class="btn-danger" data-remove="watchlist" data-ticker="' + esc(w.ticker) + '">Remove</button></td>' +
+      '</tr>';
+  }).join('');
+}
+
+function renderRisk(data) {
+  var a = data.analytics;
+  var cc = a.concentration;
+
+  $('concBody').innerHTML = [
+    ['Positions', cc.positionCount],
+    ['Largest position', pct(cc.topWeight)],
+    ['Top 3 combined', pct(cc.top3Weight)],
+    ['Herfindahl index', cc.hhi.toFixed(3)],
+    ['Behaves like', cc.effectiveHoldings.toFixed(1) + ' equal positions']
+  ].map(function (r) {
+    return '<tr><td style="text-align:left;color:var(--text-secondary)">' + r[0] +
+           '</td><td>' + r[1] + '</td></tr>';
+  }).join('');
+
+  var d = a.drawdown;
+  var ratio = d.tolerance > 0 ? Math.min(d.modelledDrawdown / d.tolerance, 1) : 0;
+  $('ddSub').textContent = 'Each position modelled at a pessimistic single-name loss, weighted by size.';
+  $('ddMeter').className = 'meter' + (d.withinTolerance ? '' : ' over');
+  $('ddMeter').firstElementChild.style.width = (ratio * 100).toFixed(1) + '%';
+  $('ddText').innerHTML = '<strong>' + pct(d.modelledDrawdown) + '</strong> modelled vs ' +
+    pct(d.tolerance) + ' tolerance — ' +
+    (d.withinTolerance
+      ? '<span class="up">within tolerance</span>'
+      : '<span class="down">beyond tolerance</span>');
+
+  $('ddBody').innerHTML = d.contributions.map(function (x) {
+    return '<tr><td><span class="tk">' + esc(x.ticker) + '</span></td>' +
+      '<td>' + pct(x.weight) + '</td>' +
+      '<td>' + pct(x.assumedDrawdown, 0) + '</td>' +
+      '<td>' + pct(x.contribution) + '</td></tr>';
+  }).join('');
+
+  $('twBody').innerHTML = a.taiwan.map(function (b) {
+    return '<tr><td style="text-align:left">' + esc(b.label) +
+      '<div class="co">' + esc(b.tickers.join(', ')) + '</div></td>' +
+      '<td>' + pct(b.weight) + '</td></tr>';
+  }).join('') || '<tr><td class="co">No positions.</td></tr>';
+
+  $('bandBody').innerHTML = a.bands.map(function (b) {
+    var label = b.status === 'over' ? 'over band' : (b.status === 'under' ? 'under band' : 'in band');
+    return '<tr><td><span class="tk">' + esc(b.ticker) + '</span></td>' +
+      '<td><span class="pill">' + esc(b.riskTag) + '</span></td>' +
+      '<td>' + pct(b.weight) + '</td>' +
+      '<td>' + pct(b.bandMin, 0) + '–' + pct(b.bandMax, 0) + '</td>' +
+      '<td><span class="pill' + (b.trimSuggested ? ' over' : '') + '">' + label +
+        (b.trimSuggested ? ' · trim' : '') + '</span></td></tr>';
+  }).join('') || '<tr><td class="co">No positions.</td></tr>';
+}
+
+/* ---------------- modal ---------------- */
+
+function openModal() {
+  $('fTicker').value = '';
+  $('fShares').value = '';
+  $('fCost').value = '';
+  $('fNotes').value = '';
+  $('fTarget').value = '';
+  $('fThesis').value = '';
+  $('modalMsg').innerHTML = '';
+  setList('watchlist');
+  $('overlay').classList.remove('hidden');
+  $('fTicker').focus();
+}
+function closeModal() { $('overlay').classList.add('hidden'); }
+
+function setList(which) {
+  state.list = which;
+  $('listWatch').setAttribute('aria-pressed', String(which === 'watchlist'));
+  $('listPos').setAttribute('aria-pressed', String(which === 'positions'));
+  $('posFields').classList.toggle('hidden', which !== 'positions');
+  $('watchFields').classList.toggle('hidden', which !== 'watchlist');
+  $('btnSave').textContent = which === 'positions' ? 'Add position' : 'Add to watchlist';
+}
+
+function save(force) {
+  var payload = {
+    list: state.list,
+    ticker: $('fTicker').value,
+    force: !!force
+  };
+  if (state.list === 'positions') {
+    payload.shares = $('fShares').value;
+    payload.avgCost = $('fCost').value;
+    payload.costCurrency = $('fCcy').value;
+    payload.riskTag = $('fTag').value;
+    payload.notes = $('fNotes').value;
+  } else {
+    payload.targetEntry = $('fTarget').value;
+    payload.thesis = $('fThesis').value;
+  }
+
+  $('btnSave').disabled = true;
+  $('modalMsg').innerHTML = '<div class="msg">Checking…</div>';
+
+  rpc('addHolding', payload)
+    .then(function (data) {
+      closeModal();
+      render(data);
+    })
+    .catch(function (e) {
+      var msg = e.message || String(e);
+      // Coverage is genuinely unreliable for recent listings, so offer to add anyway
+      // rather than pretending the ticker does not exist.
+      var recoverable = /no price for|does not look like/i.test(msg) && !force;
+      $('modalMsg').innerHTML =
+        '<div class="msg err">' + esc(msg) + '</div>' +
+        (recoverable
+          ? '<button id="btnForce">Add it anyway (no live price)</button>'
+          : '');
+      if (recoverable) $('btnForce').addEventListener('click', function () { save(true); });
+    })
+    .then(function () { $('btnSave').disabled = false; });
+}
+
+/* ---------------- wiring ---------------- */
+
+document.addEventListener('DOMContentLoaded', function () {
+  $('btnAdd').addEventListener('click', openModal);
+  $('btnCancel').addEventListener('click', closeModal);
+  $('btnSave').addEventListener('click', function () { save(false); });
+  $('btnRefresh').addEventListener('click', load);
+  $('listWatch').addEventListener('click', function () { setList('watchlist'); });
+  $('listPos').addEventListener('click', function () { setList('positions'); });
+
+  $('overlay').addEventListener('click', function (e) {
+    if (e.target === $('overlay')) closeModal();
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Enter' && !$('overlay').classList.contains('hidden') &&
+        e.target.tagName !== 'TEXTAREA') save(false);
+  });
+
+  ['USD', 'ILS'].forEach(function (c) {
+    $('ccy' + c).addEventListener('click', function () {
+      if (state.busy || !state.data || state.data.settings.displayCurrency === c) return;
+      setBusy(true);
+      rpc('updateSetting', 'displayCurrency', c)
+        .then(render)
+        .catch(function (e) { alert(e.message); })
+        .then(function () { setBusy(false); });
+    });
+  });
+
+  document.querySelectorAll('.tab').forEach(function (tab) {
+    tab.addEventListener('click', function () {
+      document.querySelectorAll('.tab').forEach(function (t) {
+        t.setAttribute('aria-selected', String(t === tab));
+      });
+      ['pf', 'wl', 'rk'].forEach(function (p) {
+        $('panel-' + p).classList.toggle('hidden', p !== tab.dataset.panel);
+      });
+    });
+  });
+
+  document.body.addEventListener('click', function (e) {
+    var btn = e.target.closest ? e.target.closest('[data-remove]') : null;
+    if (!btn) return;
+    var list = btn.dataset.remove, ticker = btn.dataset.ticker;
+    if (!confirm('Remove ' + ticker + ' from your ' +
+        (list === 'positions' ? 'portfolio' : 'watchlist') + '?')) return;
+    setBusy(true);
+    rpc('removeHolding', list, ticker)
+      .then(render)
+      .catch(function (err) { alert(err.message); })
+      .then(function () { setBusy(false); });
+  });
+
+  // Chart colours are read from CSS variables, so re-render when the OS theme flips.
+  if (window.matchMedia) {
+    window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change', function () {
+      if (state.data) renderCharts(state.data, state.data.settings.displayCurrency);
+    });
+  }
+
+  load();
+});
+</script>

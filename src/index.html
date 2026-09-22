@@ -1,0 +1,246 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <meta charset="utf-8">
+  <title>Portfolio</title>
+  <?!= include('styles'); ?>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="wrap">
+
+  <header>
+    <div class="title-row">
+      <h1>Portfolio</h1>
+      <span class="stamp" id="stamp">loading…</span>
+    </div>
+
+    <div class="hero">
+      <div>
+        <div class="hero-label">Market value</div>
+        <div class="hero-figure" id="heroValue">—</div>
+      </div>
+      <div class="stat">
+        <div class="hero-label">Unrealised P&amp;L</div>
+        <div class="stat-value" id="heroPnl">—</div>
+      </div>
+      <div class="stat">
+        <div class="hero-label">Today</div>
+        <div class="stat-value" id="heroDay">—</div>
+      </div>
+      <div class="stat">
+        <div class="hero-label">Cost basis</div>
+        <div class="stat-value" id="heroCost">—</div>
+      </div>
+    </div>
+  </header>
+
+  <div class="controls">
+    <button class="btn-primary" id="btnAdd">+ Add stock</button>
+    <button id="btnRefresh">Refresh</button>
+    <div class="spacer"></div>
+    <div class="seg" role="group" aria-label="Display currency">
+      <button id="ccyUSD" aria-pressed="true">USD</button>
+      <button id="ccyILS" aria-pressed="false">ILS</button>
+    </div>
+  </div>
+
+  <div id="notices"></div>
+
+  <div class="tabs" role="tablist">
+    <button class="tab" role="tab" aria-selected="true"  data-panel="pf">My positions</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="wl">Watchlist</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="rk">Risk</button>
+  </div>
+
+  <!-- ---------------- positions ---------------- -->
+  <section id="panel-pf">
+    <div class="grid">
+      <div class="card">
+        <h2>Allocation by position</h2>
+        <div class="sub">Share of market value. Values are labelled — colour is not the only cue.</div>
+        <div class="chart-box"><canvas id="piePositions"></canvas></div>
+        <ul class="legend" id="legendPositions"></ul>
+      </div>
+      <div class="card">
+        <h2>Allocation by theme</h2>
+        <div class="sub">Where the concentration actually sits — names in one theme tend to move together.</div>
+        <div class="chart-box"><canvas id="pieThemes"></canvas></div>
+        <ul class="legend" id="legendThemes"></ul>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Positions</h2>
+      <div class="sub" id="pfCount"></div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticker</th><th>Shares</th><th>Avg cost</th><th>Price</th>
+              <th>Today</th><th>Value</th><th>P&amp;L</th><th>P&amp;L %</th>
+              <th>Weight</th><th>Tag</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="pfBody"></tbody>
+        </table>
+      </div>
+      <div class="empty hidden" id="pfEmpty">
+        No positions yet. Use <strong>+ Add stock</strong> to enter your first holding.
+      </div>
+    </div>
+  </section>
+
+  <!-- ---------------- watchlist ---------------- -->
+  <section id="panel-wl" class="hidden">
+    <div class="card" style="margin-top:16px">
+      <h2>Watchlist</h2>
+      <div class="sub">Candidates you do not own. Kept deliberately separate from your positions.</div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Ticker</th><th>Price</th><th>Today</th><th>52w range</th>
+              <th>Target</th><th>vs target</th><th>P/E</th><th>Theme</th><th></th>
+            </tr>
+          </thead>
+          <tbody id="wlBody"></tbody>
+        </table>
+      </div>
+      <div class="empty hidden" id="wlEmpty">Watchlist is empty.</div>
+    </div>
+  </section>
+
+  <!-- ---------------- risk ---------------- -->
+  <section id="panel-rk" class="hidden">
+    <div class="grid">
+      <div class="card">
+        <h2>Concentration</h2>
+        <div class="sub">How much of the portfolio rides on its biggest bets.</div>
+        <table>
+          <tbody id="concBody"></tbody>
+        </table>
+      </div>
+
+      <div class="card">
+        <h2>Bad-case drawdown</h2>
+        <div class="sub" id="ddSub"></div>
+        <div class="meter" id="ddMeter"><span style="width:0%"></span></div>
+        <div style="font-size:12px;color:var(--text-secondary)" id="ddText"></div>
+        <table style="margin-top:14px">
+          <thead>
+            <tr><th>Ticker</th><th>Weight</th><th>Assumed loss</th><th>Costs you</th></tr>
+          </thead>
+          <tbody id="ddBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>Taiwan / China supply-chain exposure</h2>
+        <div class="sub">
+          Semiconductor dependency is not uniform. Intel is classed as a hedge because it is
+          one of the few non-Taiwanese leading-edge foundries.
+        </div>
+        <table><tbody id="twBody"></tbody></table>
+      </div>
+
+      <div class="card">
+        <h2>Position size vs band</h2>
+        <div class="sub">
+          Size, not stock selection, is what keeps a single-name loss inside your tolerance.
+        </div>
+        <table>
+          <thead><tr><th>Ticker</th><th>Tag</th><th>Weight</th><th>Band</th><th>Status</th></tr></thead>
+          <tbody id="bandBody"></tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <p class="disclaimer">
+    Prices come from GOOGLEFINANCE and are delayed up to ~20 minutes. Historical
+    GOOGLEFINANCE data is not available to Apps Script, so the price history in
+    this app starts accumulating from the day it was set up rather than being
+    backfilled.
+    <br><br>
+    This tool reports metrics and flags risks. It does not predict prices and it
+    is not financial advice. Drawdown figures are deliberately pessimistic
+    modelling assumptions, not forecasts.
+  </p>
+</div>
+
+<!-- ---------------- add modal ---------------- -->
+<div class="overlay hidden" id="overlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <h2 id="modalTitle">Add a stock</h2>
+
+    <div class="field">
+      <label for="fTicker">Ticker or company name</label>
+      <input id="fTicker" placeholder="INTC, or &quot;spacex&quot;" autocomplete="off">
+    </div>
+
+    <div class="field">
+      <label>Add to</label>
+      <div class="seg" role="group">
+        <button id="listWatch" aria-pressed="true">Watchlist</button>
+        <button id="listPos"   aria-pressed="false">My positions</button>
+      </div>
+    </div>
+
+    <div id="posFields" class="hidden">
+      <div class="row2">
+        <div class="field">
+          <label for="fShares">Shares</label>
+          <input id="fShares" type="number" step="any" min="0" placeholder="10">
+        </div>
+        <div class="field">
+          <label for="fCost">Average cost / share</label>
+          <input id="fCost" type="number" step="any" min="0" placeholder="100">
+        </div>
+      </div>
+      <div class="row2">
+        <div class="field">
+          <label for="fCcy">Cost currency</label>
+          <select id="fCcy"><option>USD</option><option>ILS</option></select>
+        </div>
+        <div class="field">
+          <label for="fTag">Risk tag</label>
+          <select id="fTag">
+            <option value="core">Core conviction (15–25%)</option>
+            <option value="growth">Growth (5–15%)</option>
+            <option value="speculative">Speculative (2–5%)</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label for="fNotes">Why you are buying it — and today's date</label>
+        <textarea id="fNotes" placeholder="At 5 years the useful review question is whether this reasoning still holds."></textarea>
+      </div>
+    </div>
+
+    <div id="watchFields">
+      <div class="field">
+        <label for="fTarget">Target entry price (optional)</label>
+        <input id="fTarget" type="number" step="any" min="0" placeholder="95">
+      </div>
+      <div class="field">
+        <label for="fThesis">Thesis (optional)</label>
+        <textarea id="fThesis"></textarea>
+      </div>
+    </div>
+
+    <div id="modalMsg"></div>
+
+    <div class="modal-actions">
+      <button id="btnCancel">Cancel</button>
+      <button class="btn-primary" id="btnSave">Add</button>
+    </div>
+  </div>
+</div>
+
+<?!= include('app.js'); ?>
+</body>
+</html>
