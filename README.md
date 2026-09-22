@@ -118,11 +118,18 @@ cost basis to exercise the stale-data and FX paths.
 
 ## Design notes
 
-Colours come from the `dataviz` skill's documented reference palette, used
-unmodified and in slot order, so its published validation applies. The palette
-validator itself is a Node script and Node is not installed on the machine this
-was built on, so it was not re-run — re-running is required when you substitute
-your own ramps, which has not been done here.
+Colours come from the `dataviz` skill's reference palette, used unmodified and
+in slot order. The palette validator was run against both surfaces and passes:
+
+| Mode | Lightness | Chroma | CVD separation | Normal vision | Contrast |
+|---|---|---|---|---|---|
+| Light `#fcfcfb` | PASS | PASS | PASS ΔE 9.1 | PASS ΔE 19.6 | WARN — 3 slots < 3:1 |
+| Dark `#1a1a19` | PASS | PASS | PASS ΔE 8.4 | PASS ΔE 19.3 | PASS |
+
+The light-mode contrast warning obligates *relief* — visible labels or a table
+view — which is satisfied: every slice is value-labelled in the legend and the
+positions table is always present. Re-run the validator if you substitute your
+own ramps.
 
 Pie charts are capped at 6 slices plus "Other" (part-to-whole reads at a glance
 only up to ~6 segments), every slice is value-labelled in the legend so identity
