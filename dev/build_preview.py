@@ -125,6 +125,19 @@ window.google = { script: { run: (function () {
 """
 
 
+BANNER = """
+<div style="max-width:1120px;margin:12px auto 0;padding:10px 14px;border-radius:8px;
+            border:1px solid #eb6834;border-left-width:3px;background:rgba(235,104,52,0.08);
+            font:13px/1.5 system-ui,-apple-system,'Segoe UI',sans-serif;color:inherit">
+  <strong>Local preview - mock data.</strong>
+  Prices are invented and the fixture set is limited to
+  INTC, MSFT, NVDA, IONQ, TSM, AMD, AVGO (plus ZZZZ, deliberately broken).
+  Any other ticker will report &ldquo;no price&rdquo; <em>here only</em> - that is the mock,
+  not GOOGLEFINANCE. The deployed app looks up real symbols.
+</div>
+"""
+
+
 def main() -> None:
     html = (SRC / "index.html").read_text(encoding="utf-8")
 
@@ -139,6 +152,10 @@ def main() -> None:
 
     app_js = (SRC / "app.js.html").read_text(encoding="utf-8")
     html = html.replace("<?!= include('app.js'); ?>", logic + MOCK + app_js)
+
+    marker = '<div class="wrap">'
+    assert html.count(marker) == 1, "wrap div not found"
+    html = html.replace(marker, BANNER + marker)
 
     leftover = re.findall(r"<\?!?=.*?\?>", html)
     if leftover:

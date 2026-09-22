@@ -128,7 +128,11 @@ function notice(level, html) {
 }
 
 function renderNotices(warnings) {
-  $('notices').innerHTML = (warnings || []).map(function (w) {
+  var list = warnings || [];
+  // Alerts live at the foot of the page, so the section (and its heading)
+  // is hidden entirely when there is nothing to say.
+  $('alerts').classList.toggle('hidden', list.length === 0);
+  $('notices').innerHTML = list.map(function (w) {
     return notice(w.level, esc(w.text));
   }).join('');
 }
