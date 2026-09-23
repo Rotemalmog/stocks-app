@@ -51,6 +51,7 @@
     <button class="tab" role="tab" aria-selected="true"  data-panel="pf">My positions</button>
     <button class="tab" role="tab" aria-selected="false" data-panel="wl">Watchlist</button>
     <button class="tab" role="tab" aria-selected="false" data-panel="rk">Risk</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="st">Strategy</button>
   </div>
 
   <!-- ---------------- positions ---------------- -->
@@ -155,6 +156,65 @@
           <thead><tr><th>Ticker</th><th>Tag</th><th>Weight</th><th>Band</th><th>Status</th></tr></thead>
           <tbody id="bandBody"></tbody>
         </table>
+      </div>
+    </div>
+  </section>
+
+
+  <!-- ---------------- strategy ---------------- -->
+  <section id="panel-st" class="hidden">
+    <div class="card" style="margin-top:16px">
+      <h2>3&ndash;5 year screen</h2>
+      <div class="sub">
+        Multi-factor score in the quality / financial-strength / durable-growth /
+        reasonable-valuation tradition. <strong>Momentum is deliberately excluded</strong> &mdash;
+        the momentum premium works over 3&ndash;12 months and reverses over multi-year
+        horizons, so it is the wrong signal at this holding period.
+      </div>
+
+      <div id="stNeedsKey" class="hidden">
+        <div class="notice warn">
+          <span class="ico">!</span>
+          <span>
+            Fundamentals need a free Finnhub API key. GOOGLEFINANCE carries no ROIC,
+            margins, debt or growth history. Get a key at
+            <a href="https://finnhub.io/register" target="_blank" rel="noopener">finnhub.io/register</a>,
+            then run <code>setFinnhubKey("your_key")</code> once in the Apps Script editor.
+          </span>
+        </div>
+      </div>
+
+      <div id="stEmpty" class="empty hidden">
+        Nothing to score yet. Add stocks to your portfolio or watchlist first.
+      </div>
+
+      <div id="stContent" class="hidden">
+        <button id="btnScore" class="btn-primary" style="margin-bottom:14px">Run the screen</button>
+        <div id="stStamp" class="sub"></div>
+        <div style="overflow-x:auto">
+          <table>
+            <thead>
+              <tr>
+                <th>Ticker</th><th>Score</th><th>Quality</th><th>Strength</th>
+                <th>Growth</th><th>Value</th><th>Resilience</th>
+                <th>Coverage</th><th>Held</th>
+              </tr>
+            </thead>
+            <tbody id="stBody"></tbody>
+          </table>
+        </div>
+        <div id="stDetail"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>What this score is and is not</h2>
+      <div class="sub">
+        It ranks businesses on published fundamentals. It does not predict prices,
+        and a high score is not a buy signal &mdash; factor premiums are cyclical and
+        can underperform for three to seven years at a stretch, which is the whole
+        length of your holding period. Treat it as a filter that tells you which
+        companies deserve the research time, not as an answer.
       </div>
     </div>
   </section>

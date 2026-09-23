@@ -7,7 +7,8 @@
 var state = { data: null, list: 'watchlist', busy: false };
 var charts = { positions: null, themes: null };
 
-var MAX_SLICES = 6;   // part-to-whole reads at a glance only up to ~6 segments
+var MAX_SLICES = 6;
+var strategyPrimed = false;   // part-to-whole reads at a glance only up to ~6 segments
 
 /** Promise wrapper around the callback-based google.script.run. */
 function rpc(fn) {
@@ -384,6 +385,94 @@ function save(force) {
     .then(function () { $('btnSave').disabled = false; });
 }
 
+/* ---------------- strategy screen ---------------- */
+
+function scoreClass(v) {
+  if (v === null || v === undefined) return '';
+  if (v >= 70) return 'up';
+  if (v < 45) return 'down';
+  return '';
+}
+function fmtScore(v) {
+  return (v === null || v === undefined) ? '—' : Math.round(v);
+}
+
+function loadStrategy() {
+  var btn = $('btnScore');
+  btn.disabled = true;
+  btn.textContent = 'Scoring… (about a second per ticker)';
+  $('stStamp').textContent = '';
+
+  rpc('getStrategyData')
+    .then(renderStrategy)
+    .catch(function (e) {
+      $('stBody').innerHTML = '';
+      $('stDetail').innerHTML = notice('danger', 'Screen failed: ' + esc(e.message));
+    })
+    .then(function () {
+      btn.disabled = false;
+      btn.textContent = 'Run the screen';
+    });
+}
+
+function renderStrategy(d) {
+  $('stNeedsKey').classList.toggle('hidden', !d.needsKey);
+  $('stEmpty').classList.toggle('hidden', !d.empty);
+  $('stContent').classList.toggle('hidden', d.empty || d.needsKey);
+  if (d.empty || d.needsKey) return;
+
+  $('stStamp').textContent = d.fetchedAt
+    ? d.fetchedAt + '  ·  ' + (d.elapsedMs / 1000).toFixed(1) + 's'
+    : '';
+
+  $('stBody').innerHTML = d.rows.map(function (r) {
+    var cov = Math.round(r.coverage * 100);
+    return '<tr>' +
+      '<td><span class="tk">' + esc(r.ticker) + '</span>' +
+        (r.fetchError ? ' <span class="pill stale">' + esc(r.fetchError) + '</span>' : '') + '</td>' +
+      '<td class="' + scoreClass(r.total) + '" style="font-weight:600">' + fmtScore(r.total) + '</td>' +
+      '<td class="' + scoreClass(r.pillars.quality) + '">' + fmtScore(r.pillars.quality) + '</td>' +
+      '<td class="' + scoreClass(r.pillars.strength) + '">' + fmtScore(r.pillars.strength) + '</td>' +
+      '<td class="' + scoreClass(r.pillars.growth) + '">' + fmtScore(r.pillars.growth) + '</td>' +
+      '<td class="' + scoreClass(r.pillars.valuation) + '">' + fmtScore(r.pillars.valuation) + '</td>' +
+      '<td class="' + scoreClass(r.pillars.resilience) + '">' + fmtScore(r.pillars.resilience) + '</td>' +
+      '<td>' + (r.lowConfidence
+          ? '<span class="pill over">' + cov + '% low</span>'
+          : cov + '%') + '</td>' +
+      '<td>' + (r.held ? '<span class="pill">held</span>' : '') + '</td>' +
+      '</tr>';
+  }).join('');
+
+  // Per-stock detail: every raw number beside the score it produced, so no
+  // composite is ever shown without the inputs that made it.
+  $('stDetail').innerHTML = d.rows.map(function (r) {
+    var flags = (r.flags || []).map(function (f) {
+      return notice(f.level, esc(f.text));
+    }).join('');
+
+    var rowsHtml = r.details.map(function (m) {
+      var raw = (m.raw === null || m.raw === undefined) ? '—'
+        : (typeof m.raw === 'number' ? (Math.round(m.raw * 100) / 100) : esc(m.raw));
+      return '<tr><td style="text-align:left">' + esc(m.label) +
+        '<div class="co">' + esc(m.pillar) + '</div></td>' +
+        '<td>' + raw + '</td>' +
+        '<td class="' + scoreClass(m.score) + '">' + fmtScore(m.score) + '</td></tr>';
+    }).join('');
+
+    return '<details style="margin-top:14px">' +
+      '<summary style="cursor:pointer;padding:8px 0;font-weight:600">' +
+        esc(r.ticker) + ' — score ' + fmtScore(r.total) +
+        (r.lowConfidence ? ' (low confidence: ' + r.metricsAvailable + ' of ' +
+                           r.metricsTotal + ' metrics)' : '') +
+      '</summary>' +
+      flags +
+      '<table style="margin-top:8px"><thead><tr>' +
+        '<th>Metric</th><th>Value</th><th>Score</th>' +
+      '</tr></thead><tbody>' + rowsHtml + '</tbody></table>' +
+      '</details>';
+  }).join('');
+}
+
 /* ---------------- wiring ---------------- */
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -391,6 +480,7 @@ document.addEventListener('DOMContentLoaded', function () {
   $('btnCancel').addEventListener('click', closeModal);
   $('btnSave').addEventListener('click', function () { save(false); });
   $('btnRefresh').addEventListener('click', load);
+  $('btnScore').addEventListener('click', loadStrategy);
   $('listWatch').addEventListener('click', function () { setList('watchlist'); });
   $('listPos').addEventListener('click', function () { setList('positions'); });
 
@@ -419,9 +509,13 @@ document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('.tab').forEach(function (t) {
         t.setAttribute('aria-selected', String(t === tab));
       });
-      ['pf', 'wl', 'rk'].forEach(function (p) {
+      ['pf', 'wl', 'rk', 'st'].forEach(function (p) {
         $('panel-' + p).classList.toggle('hidden', p !== tab.dataset.panel);
       });
+      if (tab.dataset.panel === 'st' && !strategyPrimed) {
+        strategyPrimed = true;
+        rpc('getStrategyData').then(renderStrategy).catch(function () {});
+      }
     });
   });
 

@@ -167,6 +167,18 @@ function buildWarnings_(rows, settings, top1, top3) {
     });
   }
 
+  // Research convention: revisit the thesis when a position is ~20% below
+  // cost. The point is not to sell - it is to force the question "has
+  // something actually changed?" while it is still a small decision.
+  rows.forEach(function (r) {
+    if (r.pnlPct === null || r.pnlPct > THESIS_REVIEW_DRAWDOWN) return;
+    w.push({
+      level: 'warn',
+      text: r.ticker + ' is ' + pct_(r.pnlPct) + ' below your cost basis. ' +
+            'Re-read why you bought it: has the thesis broken, or only the price?'
+    });
+  });
+
   var stale = rows.filter(function (r) { return r.stale; });
   if (stale.length) {
     w.push({
