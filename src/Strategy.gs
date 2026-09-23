@@ -62,44 +62,125 @@ function testFinnhub() {
   return out;
 }
 
+/** Only these fields are kept, which also keeps cache entries small. */
+function extractMetrics_(raw) {
+  var out = {};
+  Object.keys(METRIC_BANDS).forEach(function (name) {
+    var f = METRIC_BANDS[name].field;
+    if (isFiniteNumber_(raw[f])) out[f] = raw[f];
+  });
+  return out;
+}
+
+function metricsCacheKey_(ticker) { return 'fh_v1_' + ticker; }
+
 /**
- * Fetch Finnhub basic financials for one symbol.
- * @return {{ok: boolean, metrics: Object, error: string}}
+ * Fetch Finnhub basic financials for one symbol (cache-aware, single request).
+ * Kept for probes such as testFinnhub(); bulk work uses fetchAllMetrics_.
  */
 function fetchMetrics_(ticker) {
-  var key = getFinnhubKey_();
-  if (!key) return { ok: false, metrics: {}, error: 'no_api_key' };
-
-  var url = FINNHUB_BASE + '/stock/metric?symbol=' + encodeURIComponent(ticker) +
-            '&metric=all&token=' + encodeURIComponent(key);
-  try {
-    var res = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-    var code = res.getResponseCode();
-    if (code === 429) return { ok: false, metrics: {}, error: 'rate_limited' };
-    if (code !== 200) return { ok: false, metrics: {}, error: 'http_' + code };
-
-    var body = JSON.parse(res.getContentText());
-    var metrics = (body && body.metric) ? body.metric : null;
-    if (!metrics) return { ok: false, metrics: {}, error: 'no_data' };
-    return { ok: true, metrics: metrics, error: '' };
-  } catch (e) {
-    return { ok: false, metrics: {}, error: String(e.message || e) };
-  }
+  var res = fetchAllMetrics_([ticker]);
+  return res[ticker];
 }
 
 /**
- * Fetch fundamentals for several tickers.
- * Free tier allows 60 calls/minute; a short pause keeps us clear of it, and
- * the whole batch stays well inside the 6-minute execution limit for the
- * portfolio-sized lists this app deals with.
+ * Fetch fundamentals for many tickers.
+ *
+ * Two things matter here:
+ *
+ * 1. UrlFetchApp.fetchAll issues the requests CONCURRENTLY. The previous
+ *    sequential loop with a 1.1s pause took ~22s for 20 tickers, which is
+ *    both slow and close to the RPC patience of the UI.
+ * 2. Fundamentals change quarterly, so they are cached for six hours. That
+ *    removes almost all repeat traffic and is what actually keeps us clear
+ *    of the free tier's 60 calls/minute - not sleeping between requests.
  */
 function fetchAllMetrics_(tickers) {
   var out = {};
-  tickers.forEach(function (t, i) {
-    if (i > 0) Utilities.sleep(1100);
-    out[t] = fetchMetrics_(t);
+  var key = getFinnhubKey_();
+
+  if (!key) {
+    tickers.forEach(function (t) { out[t] = { ok: false, metrics: {}, error: 'no_api_key' }; });
+    return out;
+  }
+
+  var cache = CacheService.getScriptCache();
+  var misses = [];
+
+  // Cache lookup first.
+  var cached = {};
+  try {
+    cached = cache.getAll(tickers.map(metricsCacheKey_)) || {};
+  } catch (e) {
+    cached = {};   // a cache failure must never fail the request
+  }
+
+  tickers.forEach(function (t) {
+    var hit = cached[metricsCacheKey_(t)];
+    if (hit) {
+      try {
+        out[t] = { ok: true, metrics: JSON.parse(hit), error: '', cached: true };
+        return;
+      } catch (e) { /* corrupt entry - fall through and refetch */ }
+    }
+    misses.push(t);
   });
+
+  if (!misses.length) return out;
+
+  var requests = misses.map(function (t) {
+    return {
+      url: FINNHUB_BASE + '/stock/metric?symbol=' + encodeURIComponent(t) +
+           '&metric=all&token=' + encodeURIComponent(key),
+      muteHttpExceptions: true
+    };
+  });
+
+  var responses;
+  try {
+    responses = UrlFetchApp.fetchAll(requests);
+  } catch (e) {
+    misses.forEach(function (t) {
+      out[t] = { ok: false, metrics: {}, error: String(e.message || e) };
+    });
+    return out;
+  }
+
+  var toCache = {};
+  misses.forEach(function (t, i) {
+    var r = responses[i];
+    var code = r.getResponseCode();
+
+    if (code === 429) { out[t] = { ok: false, metrics: {}, error: 'rate_limited' }; return; }
+    if (code === 401 || code === 403) { out[t] = { ok: false, metrics: {}, error: 'bad_api_key' }; return; }
+    if (code !== 200) { out[t] = { ok: false, metrics: {}, error: 'http_' + code }; return; }
+
+    var body;
+    try { body = JSON.parse(r.getContentText()); }
+    catch (e) { out[t] = { ok: false, metrics: {}, error: 'bad_json' }; return; }
+
+    if (!body || !body.metric) { out[t] = { ok: false, metrics: {}, error: 'no_data' }; return; }
+
+    var m = extractMetrics_(body.metric);
+    out[t] = { ok: true, metrics: m, error: '', cached: false };
+    toCache[metricsCacheKey_(t)] = JSON.stringify(m);
+  });
+
+  if (Object.keys(toCache).length) {
+    try { cache.putAll(toCache, 21600); } catch (e) { /* caching is best-effort */ }
+  }
   return out;
+}
+
+/** Drop cached fundamentals so the next screen refetches. */
+function clearMetricsCache() {
+  var tickers = getPositions_().map(function (p) { return p.ticker; })
+    .concat(getWatchlist_().map(function (w) { return w.ticker; }));
+  try {
+    CacheService.getScriptCache().removeAll(tickers.map(metricsCacheKey_));
+  } catch (e) { /* nothing cached */ }
+  Logger.log('Cleared cached fundamentals for ' + tickers.length + ' ticker(s).');
+  return 'cleared';
 }
 
 /* ------------------------------------------------------------------ */

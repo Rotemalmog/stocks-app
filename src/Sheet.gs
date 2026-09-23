@@ -131,6 +131,28 @@ function seedWatchlist_(ss) {
 /* Generic row access                                                   */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Serialise writes to the Sheet.
+ *
+ * Two clients - the web app on a laptop and the same app on a phone, or a
+ * trigger firing mid-edit - can otherwise interleave a read-modify-write and
+ * lose a row. Reads are left unlocked: a slightly stale read is harmless,
+ * a lost write is not.
+ */
+function withLock_(fn) {
+  var lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(15000);
+  } catch (e) {
+    throw new Error('The sheet is busy with another change. Try again in a moment.');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 /** Read a tab as an array of objects keyed by its header row. */
 function readRows_(tabName) {
   var sh = getSpreadsheet_().getSheetByName(tabName);
@@ -149,25 +171,29 @@ function readRows_(tabName) {
 }
 
 function appendRow_(tabName, headers, obj) {
-  var sh = getSpreadsheet_().getSheetByName(tabName);
-  var row = headers.map(function (h) {
-    return obj[h] === undefined || obj[h] === null ? '' : obj[h];
+  return withLock_(function () {
+    var sh = getSpreadsheet_().getSheetByName(tabName);
+    var row = headers.map(function (h) {
+      return obj[h] === undefined || obj[h] === null ? '' : obj[h];
+    });
+    sh.appendRow(row);
   });
-  sh.appendRow(row);
 }
 
 /** Delete the first row whose ticker matches. Returns true if one was removed. */
 function deleteByTicker_(tabName, ticker) {
-  var sh = getSpreadsheet_().getSheetByName(tabName);
-  if (!sh || sh.getLastRow() < 2) return false;
-  var col = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
-  for (var i = 0; i < col.length; i++) {
-    if (String(col[i][0]).trim().toUpperCase() === ticker) {
-      sh.deleteRow(i + 2);
-      return true;
+  return withLock_(function () {
+    var sh = getSpreadsheet_().getSheetByName(tabName);
+    if (!sh || sh.getLastRow() < 2) return false;
+    var col = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+    for (var i = 0; i < col.length; i++) {
+      if (String(col[i][0]).trim().toUpperCase() === ticker) {
+        sh.deleteRow(i + 2);
+        return true;
+      }
     }
-  }
-  return false;
+    return false;
+  });
 }
 
 /* ------------------------------------------------------------------ */
@@ -215,6 +241,10 @@ function getSettings_() {
 
 function setSetting_(key, value) {
   if (!(key in DEFAULT_SETTINGS)) throw new Error('Unknown setting: ' + key);
+  return withLock_(function () { return setSettingUnlocked_(key, value); });
+}
+
+function setSettingUnlocked_(key, value) {
   var sh = getSpreadsheet_().getSheetByName(SHEETS.SETTINGS);
   var last = sh.getLastRow();
   if (last >= 2) {
