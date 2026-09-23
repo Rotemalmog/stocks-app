@@ -37,6 +37,12 @@ function computePortfolio_(positions, quotes, usdIls, displayCurrency) {
       buyDate: p.buyDate,
       riskTag: p.riskTag,
       riskLabel: RISK_TAGS[p.riskTag].label,
+      // Carried through from the ledger. Previously dropped here, which left
+      // per-position realised P&L undefined while the total still looked right.
+      realised: isFiniteNumber_(p.realised) ? p.realised : 0,
+      txCount: p.txCount || 0,
+      mixedCurrency: !!p.mixedCurrency,
+      oversold: !!p.oversold,
       notes: p.notes,
       price: price,
       changePct: isFiniteNumber_(q.changepct) ? q.changepct / 100 : null,

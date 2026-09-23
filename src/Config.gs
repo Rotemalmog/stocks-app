@@ -8,6 +8,7 @@
 var SHEETS = {
   POSITIONS: 'Positions',
   WATCHLIST: 'Watchlist',
+  TRANSACTIONS: 'Transactions',
   QUOTES: '_Quotes',
   HISTORY: 'History',
   SETTINGS: 'Settings'
@@ -16,6 +17,7 @@ var SHEETS = {
 var HEADERS = {
   POSITIONS: ['ticker', 'shares', 'avgCost', 'costCurrency', 'buyDate', 'riskTag', 'notes'],
   WATCHLIST: ['ticker', 'addedDate', 'thesis', 'targetEntry'],
+  TRANSACTIONS: ['date', 'ticker', 'type', 'shares', 'price', 'currency', 'fees', 'notes'],
   HISTORY:   ['date', 'ticker', 'price', 'portfolioTotalUSD'],
   SETTINGS:  ['key', 'value']
 };

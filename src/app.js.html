@@ -105,6 +105,14 @@ function render(data) {
   $('heroValue').textContent = money(data.totals.marketValue, c);
   $('heroCost').textContent = money(data.totals.costBasis, c);
 
+  var realised = $('heroRealised');
+  var hasRealised = isFinite(data.realisedTotal) && data.realisedTotal !== 0;
+  $('heroRealisedWrap').classList.toggle('hidden', !hasRealised);
+  if (hasRealised) {
+    realised.textContent = signedMoney(data.realisedTotal, 'USD');
+    realised.className = 'stat-value ' + dirClass(data.realisedTotal);
+  }
+
   var pnl = $('heroPnl');
   pnl.textContent = signedMoney(data.totals.pnl, c) + '  (' + signedPct(data.totals.pnlPct) + ')';
   pnl.className = 'stat-value ' + dirClass(data.totals.pnl);
@@ -121,6 +129,7 @@ function render(data) {
   renderCharts(data, c);
   renderWatchlist(data, c);
   renderRisk(data);
+  renderTrades(data, c);
 }
 
 function notice(level, html) {
@@ -158,8 +167,13 @@ function renderPositions(data, c) {
       '<td class="' + dirClass(r.pnl) + '">' + signedMoney(r.pnl, c) + '</td>' +
       '<td class="' + dirClass(r.pnlPct) + '">' + signedPct(r.pnlPct) + '</td>' +
       '<td>' + pct(r.weight) + '</td>' +
-      '<td><span class="pill">' + esc(r.riskTag) + '</span></td>' +
-      '<td><button class="btn-danger" data-remove="positions" data-ticker="' + esc(r.ticker) + '">Remove</button></td>' +
+      '<td><span class="pill">' + esc(r.riskTag) + '</span>' +
+        (r.mixedCurrency ? ' <span class="pill over">mixed ccy</span>' : '') + '</td>' +
+      '<td style="white-space:nowrap">' +
+        '<button data-trade="BUY"  data-ticker="' + esc(r.ticker) + '">Buy</button> ' +
+        '<button data-trade="SELL" data-ticker="' + esc(r.ticker) + '">Sell</button> ' +
+        '<button class="btn-danger" data-remove="positions" data-ticker="' + esc(r.ticker) + '">Delete</button>' +
+      '</td>' +
       '</tr>';
   }).join('');
 }
@@ -473,6 +487,94 @@ function renderStrategy(d) {
   }).join('');
 }
 
+/* ---------------- trades ---------------- */
+
+function renderTrades(data, c) {
+  var txs = data.transactions || [];
+  $('txEmpty').classList.toggle('hidden', txs.length > 0);
+
+  $('txBody').innerHTML = txs.map(function (t) {
+    return '<tr>' +
+      '<td style="text-align:left">' + esc(t.date) + '</td>' +
+      '<td><span class="tk">' + esc(t.ticker) + '</span></td>' +
+      '<td><span class="pill' + (t.type === 'SELL' ? ' over' : '') + '">' + esc(t.type) + '</span></td>' +
+      '<td>' + t.shares.toLocaleString('en-US') + '</td>' +
+      '<td>' + money(t.price, t.currency) + '</td>' +
+      '<td>' + (t.fees ? money(t.fees, t.currency) : '—') + '</td>' +
+      '<td>' + money(t.shares * t.price, t.currency) + '</td>' +
+      '<td style="text-align:left" class="co">' + esc(t.notes) + '</td>' +
+      '</tr>';
+  }).join('');
+
+  var closed = data.closedPositions || [];
+  $('closedEmpty').classList.toggle('hidden', closed.length > 0);
+  $('closedBody').innerHTML = closed.map(function (p) {
+    return '<tr>' +
+      '<td><span class="tk">' + esc(p.ticker) + '</span></td>' +
+      '<td>' + esc(p.closedOn) + '</td>' +
+      '<td>' + p.txCount + '</td>' +
+      '<td class="' + dirClass(p.realised) + '">' + signedMoney(p.realised, 'USD') + '</td>' +
+      '</tr>';
+  }).join('');
+}
+
+/* ---------------- buy / sell modal ---------------- */
+
+var txState = { ticker: '', type: 'BUY' };
+
+function openTrade(ticker, type) {
+  var held = (state.data.positions || []).filter(function (p) {
+    return p.ticker === ticker;
+  })[0];
+
+  txState.ticker = ticker;
+  $('txTitle').textContent = 'Record a trade — ' + ticker;
+  $('txHolding').textContent = held
+    ? 'You hold ' + held.shares + ' at an average cost of ' + money(held.avgCost, held.costCurrency)
+    : 'New position.';
+  $('txShares').value = '';
+  $('txPrice').value = (held && held.price) ? held.price.toFixed(2) : '';
+  $('txFees').value = '';
+  $('txNotes').value = '';
+  $('txCcy').value = held ? held.costCurrency : 'USD';
+  $('txDate').value = new Date().toISOString().slice(0, 10);
+  $('txMsg').innerHTML = '';
+  setTradeType(type || 'BUY');
+  $('txOverlay').classList.remove('hidden');
+  $('txShares').focus();
+}
+
+function closeTrade() { $('txOverlay').classList.add('hidden'); }
+
+function setTradeType(type) {
+  txState.type = type;
+  $('txBuy').setAttribute('aria-pressed', String(type === 'BUY'));
+  $('txSell').setAttribute('aria-pressed', String(type === 'SELL'));
+  $('txSave').textContent = type === 'BUY' ? 'Record buy' : 'Record sell';
+}
+
+function saveTrade() {
+  $('txSave').disabled = true;
+  $('txMsg').innerHTML = '<div class="msg">Saving…</div>';
+
+  rpc('recordTransaction', {
+    ticker: txState.ticker,
+    type: txState.type,
+    shares: $('txShares').value,
+    price: $('txPrice').value,
+    currency: $('txCcy').value,
+    fees: $('txFees').value,
+    date: $('txDate').value,
+    notes: $('txNotes').value,
+    force: true
+  })
+    .then(function (data) { closeTrade(); render(data); })
+    .catch(function (e) {
+      $('txMsg').innerHTML = '<div class="msg err">' + esc(e.message) + '</div>';
+    })
+    .then(function () { $('txSave').disabled = false; });
+}
+
 /* ---------------- wiring ---------------- */
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -481,6 +583,13 @@ document.addEventListener('DOMContentLoaded', function () {
   $('btnSave').addEventListener('click', function () { save(false); });
   $('btnRefresh').addEventListener('click', load);
   $('btnScore').addEventListener('click', loadStrategy);
+  $('txCancel').addEventListener('click', closeTrade);
+  $('txSave').addEventListener('click', saveTrade);
+  $('txBuy').addEventListener('click', function () { setTradeType('BUY'); });
+  $('txSell').addEventListener('click', function () { setTradeType('SELL'); });
+  $('txOverlay').addEventListener('click', function (e) {
+    if (e.target === $('txOverlay')) closeTrade();
+  });
   $('listWatch').addEventListener('click', function () { setList('watchlist'); });
   $('listPos').addEventListener('click', function () { setList('positions'); });
 
@@ -488,7 +597,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (e.target === $('overlay')) closeModal();
   });
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape') closeModal();
+    if (e.key === 'Escape') { closeModal(); closeTrade(); }
     if (e.key === 'Enter' && !$('overlay').classList.contains('hidden') &&
         e.target.tagName !== 'TEXTAREA') save(false);
   });
@@ -509,7 +618,7 @@ document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('.tab').forEach(function (t) {
         t.setAttribute('aria-selected', String(t === tab));
       });
-      ['pf', 'wl', 'rk', 'st'].forEach(function (p) {
+      ['pf', 'wl', 'rk', 'st', 'tx'].forEach(function (p) {
         $('panel-' + p).classList.toggle('hidden', p !== tab.dataset.panel);
       });
       if (tab.dataset.panel === 'st' && !strategyPrimed) {
@@ -520,11 +629,17 @@ document.addEventListener('DOMContentLoaded', function () {
   });
 
   document.body.addEventListener('click', function (e) {
+    var trade = e.target.closest ? e.target.closest('[data-trade]') : null;
+    if (trade) { openTrade(trade.dataset.ticker, trade.dataset.trade); return; }
+
     var btn = e.target.closest ? e.target.closest('[data-remove]') : null;
     if (!btn) return;
     var list = btn.dataset.remove, ticker = btn.dataset.ticker;
-    if (!confirm('Remove ' + ticker + ' from your ' +
-        (list === 'positions' ? 'portfolio' : 'watchlist') + '?')) return;
+    var msg = list === 'positions'
+      ? 'Delete ' + ticker + ' and its ENTIRE trade history? This cannot be undone. ' +
+        'To record a sale instead, use Sell.'
+      : 'Remove ' + ticker + ' from your watchlist?';
+    if (!confirm(msg)) return;
     setBusy(true);
     rpc('removeHolding', list, ticker)
       .then(render)

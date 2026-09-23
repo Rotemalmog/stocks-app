@@ -18,6 +18,7 @@ function setup() {
   var ss = getSpreadsheet_();
   ensureTab_(ss, SHEETS.POSITIONS, HEADERS.POSITIONS);
   ensureTab_(ss, SHEETS.WATCHLIST, HEADERS.WATCHLIST);
+  ensureTab_(ss, SHEETS.TRANSACTIONS, HEADERS.TRANSACTIONS);
   ensureTab_(ss, SHEETS.HISTORY,   HEADERS.HISTORY);
   ensureTab_(ss, SHEETS.SETTINGS,  HEADERS.SETTINGS);
 
@@ -45,7 +46,8 @@ function setup() {
  */
 function removeDefaultSheet_(ss) {
   var known = {};
-  [SHEETS.POSITIONS, SHEETS.WATCHLIST, SHEETS.QUOTES, SHEETS.HISTORY, SHEETS.SETTINGS]
+  [SHEETS.POSITIONS, SHEETS.TRANSACTIONS, SHEETS.WATCHLIST, SHEETS.QUOTES,
+   SHEETS.HISTORY, SHEETS.SETTINGS]
     .forEach(function (n) { known[n] = true; });
 
   ss.getSheets().forEach(function (sh) {
@@ -59,7 +61,7 @@ function removeDefaultSheet_(ss) {
 
 /** Put the tabs in a sensible reading order, Positions first. */
 function orderTabs_(ss) {
-  [SHEETS.POSITIONS, SHEETS.WATCHLIST, SHEETS.HISTORY, SHEETS.SETTINGS]
+  [SHEETS.POSITIONS, SHEETS.TRANSACTIONS, SHEETS.WATCHLIST, SHEETS.HISTORY, SHEETS.SETTINGS]
     .forEach(function (name, i) {
       var sh = ss.getSheetByName(name);
       if (!sh) return;
@@ -200,19 +202,15 @@ function deleteByTicker_(tabName, ticker) {
 /* Typed accessors                                                      */
 /* ------------------------------------------------------------------ */
 
+/**
+ * Current positions, derived from the transaction ledger.
+ *
+ * Shares and average cost are computed from buys and sells rather than stored,
+ * so they can never drift out of step with what actually happened. The
+ * Positions tab now supplies only risk tag and notes.
+ */
 function getPositions_() {
-  return readRows_(SHEETS.POSITIONS).map(function (r) {
-    var tag = String(r.riskTag || '').trim().toLowerCase();
-    return {
-      ticker: String(r.ticker).trim().toUpperCase(),
-      shares: Number(r.shares) || 0,
-      avgCost: Number(r.avgCost) || 0,
-      costCurrency: (String(r.costCurrency || 'USD').trim().toUpperCase() === 'ILS') ? 'ILS' : 'USD',
-      buyDate: r.buyDate instanceof Date ? r.buyDate.toISOString().slice(0, 10) : String(r.buyDate || ''),
-      riskTag: RISK_TAGS[tag] ? tag : DEFAULT_RISK_TAG,
-      notes: String(r.notes || '')
-    };
-  });
+  return derivePositions_();
 }
 
 function getWatchlist_() {

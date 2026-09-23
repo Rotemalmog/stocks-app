@@ -4,14 +4,23 @@
  */
 const { load, suite, eq, near, isTrue, isNull, check, report } = require('./harness');
 
-const ctx = load(['Config.gs', 'Quotes.gs', 'Portfolio.gs', 'Analytics.gs', 'Strategy.gs']);
+const ctx = load(['Config.gs', 'Quotes.gs', 'Portfolio.gs', 'Analytics.gs', 'Strategy.gs', 'Transactions.gs']);
 
 const {
   normalizeTicker, cleanCell_, isFiniteNumber_,
   computePortfolio_, computeWatchlist_, themeOf_,
   computeAnalytics_, scoreMetric_, scoreStock_, profitabilityGate_,
-  METRIC_BANDS, DEFAULT_SETTINGS, RISK_TAGS
+  METRIC_BANDS, DEFAULT_SETTINGS, RISK_TAGS,
+  derivePositions_, getClosedPositions_, foldTransactions_, totalRealised_
 } = ctx;
+
+/** Build a transaction without repeating the boilerplate. */
+function tx(date, ticker, type, shares, price, fees, currency) {
+  return {
+    date: date, ticker: ticker, type: type, shares: shares, price: price,
+    fees: fees || 0, currency: currency || 'USD', notes: ''
+  };
+}
 
 const settings = Object.assign({}, DEFAULT_SETTINGS);
 
@@ -224,5 +233,161 @@ const noTarget = computeWatchlist_(
   [{ ticker: 'INTC', addedDate: '', thesis: '', targetEntry: null }],
   quotes, 3.72, 'USD');
 isNull('no target means no distance', noTarget[0].toTarget);
+
+
+/* ------------------------------------------------------------------ */
+suite('transaction ledger — position derivation');
+
+const oneBuy = derivePositions_([tx('2026-01-10', 'INTC', 'BUY', 10, 100)], {});
+eq('single buy shares', oneBuy[0].shares, 10);
+eq('single buy average cost', oneBuy[0].avgCost, 100);
+eq('first buy date recorded', oneBuy[0].buyDate, '2026-01-10');
+eq('no realised gain yet', oneBuy[0].realised, 0);
+
+// The whole point of the ledger: buying more must average correctly.
+const twoBuys = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-03-01', 'INTC', 'BUY', 5, 130)
+], {});
+eq('accumulated shares', twoBuys[0].shares, 15);
+near('weighted average cost', twoBuys[0].avgCost, (10 * 100 + 5 * 130) / 15);
+eq('first buy date is the earliest, not the latest', twoBuys[0].buyDate, '2026-01-10');
+eq('transaction count', twoBuys[0].txCount, 2);
+
+const withFees = derivePositions_([tx('2026-01-10', 'INTC', 'BUY', 10, 100, 9.9)], {});
+near('fees are capitalised into cost basis', withFees[0].avgCost, (10 * 100 + 9.9) / 10);
+
+/* ------------------------------------------------------------------ */
+suite('transaction ledger — sells and realised P&L');
+
+const partial = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 4, 150)
+], {});
+eq('shares reduced by the sale', partial[0].shares, 6);
+near('average cost unchanged by a sale', partial[0].avgCost, 100);
+near('realised gain measured against average cost', partial[0].realised, 4 * (150 - 100));
+
+const sellWithFees = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 4, 150, 7.5)
+], {});
+near('sale fees reduce realised gain', sellWithFees[0].realised, 4 * 50 - 7.5);
+
+const atALoss = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 10, 60)
+], {});
+eq('a fully closed holding is not an open position', atALoss.length, 0);
+
+const closed = getClosedPositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 10, 60)
+]);
+eq('closed holding is retained for the record', closed.length, 1);
+near('realised loss is negative', closed[0].realised, -400);
+eq('close date recorded', closed[0].closedOn, '2026-06-01');
+
+// Average-cost convention: buy, buy higher, then sell.
+const avgThenSell = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-03-01', 'INTC', 'BUY', 10, 200),
+  tx('2026-06-01', 'INTC', 'SELL', 5, 250)
+], {});
+near('average cost after two buys', avgThenSell[0].avgCost, 150);
+near('realised uses the average, not the first lot', avgThenSell[0].realised, 5 * (250 - 150));
+eq('remaining shares', avgThenSell[0].shares, 15);
+near('remaining basis stays at the average', avgThenSell[0].avgCost, 150);
+
+/* ------------------------------------------------------------------ */
+suite('transaction ledger — edge cases');
+
+const oversold = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 5, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 10, 150)
+], {});
+eq('selling more than held closes the position rather than going negative', oversold.length, 0);
+const oversoldClosed = getClosedPositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 5, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 10, 150)
+]);
+near('only the shares actually held are realised', oversoldClosed[0].realised, 5 * 50);
+
+// Assert against the fold directly. Testing only via derivePositions_ missed
+// removing the Math.min clamp entirely: the trailing `shares <= 0 -> 0` guard
+// masked a negative share count, so the position still filtered out and every
+// check passed. Mutation testing caught that the tests had no teeth here.
+const oversoldFold = foldTransactions_([
+  tx('2026-01-10', 'INTC', 'BUY', 5, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 10, 150)
+]).INTC;
+isTrue('oversell is flagged', oversoldFold.oversold);
+eq('shares never go negative', oversoldFold.shares, 0);
+near('realised counts only the 5 shares actually held', oversoldFold.realised, 5 * 50);
+
+const normalFold = foldTransactions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 4, 150)
+]).INTC;
+eq('a normal sale is not flagged as an oversell', normalFold.oversold, false);
+eq('remaining shares after a partial sale', normalFold.shares, 6);
+near('remaining basis tracks the average', normalFold.costBasis, 600);
+
+near('total realised across holdings', totalRealised_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-06-01', 'INTC', 'SELL', 4, 150),
+  tx('2026-02-01', 'MSFT', 'BUY', 5, 400),
+  tx('2026-07-01', 'MSFT', 'SELL', 5, 300)
+]), 4 * 50 + 5 * -100);
+
+const mixed = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100, 0, 'USD'),
+  tx('2026-03-01', 'INTC', 'BUY', 5, 400, 0, 'ILS')
+], {});
+isTrue('mixing currencies in one holding is flagged', mixed[0].mixedCurrency);
+
+const multi = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-01-11', 'MSFT', 'BUY', 2, 400)
+], {});
+eq('separate tickers stay separate', multi.length, 2);
+
+eq('empty ledger yields no positions', derivePositions_([], {}).length, 0);
+
+// Out-of-order rows must not corrupt the average.
+const ordered = derivePositions_([
+  tx('2026-03-01', 'INTC', 'BUY', 5, 130),
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100)
+], {});
+near('order of input rows does not change the average', ordered[0].avgCost, (10 * 100 + 5 * 130) / 15);
+
+/* ------------------------------------------------------------------ */
+suite('derived positions feed the existing pipeline unchanged');
+
+const derived = derivePositions_([
+  tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+  tx('2026-02-01', 'MSFT', 'BUY', 2, 400)
+], { INTC: { riskTag: 'growth', notes: '' }, MSFT: { riskTag: 'core', notes: '' } });
+
+const dpf = computePortfolio_(derived, quotes, 3.72, 'USD');
+eq('valuation works on derived positions', dpf.rows.find(r => r.ticker === 'INTC').marketValue, 1220);
+near('weights still sum to 1', dpf.rows.reduce((a, r) => a + r.weight, 0), 1);
+// computePortfolio_ builds fresh row objects; ledger-only fields must survive
+// that mapping or the UI silently loses them.
+const sold = computePortfolio_(
+  derivePositions_([
+    tx('2026-01-10', 'INTC', 'BUY', 10, 100),
+    tx('2026-06-01', 'INTC', 'SELL', 4, 150)
+  ], {}), quotes, 3.72, 'USD');
+near('realised P&L survives into the portfolio row', sold.rows[0].realised, 200);
+eq('transaction count survives', sold.rows[0].txCount, 2);
+eq('mixedCurrency flag survives', sold.rows[0].mixedCurrency, false);
+
+const dan = computeAnalytics_(dpf.rows, settings);
+eq('analytics still classify Intel as a hedge',
+   dan.taiwan.find(b => b.tickers.includes('INTC')).key, 'hedge');
+eq('risk tags carried through from metadata',
+   derived.find(p => p.ticker === 'MSFT').riskTag, 'core');
+
 
 report();

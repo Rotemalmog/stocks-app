@@ -18,31 +18,44 @@ SRC = ROOT / "src"
 OUT = ROOT / "dev" / "preview.html"
 
 # Server-side files that are pure logic (no SpreadsheetApp calls on load).
-LOGIC_FILES = ["Config.gs", "Quotes.gs", "Portfolio.gs", "Analytics.gs", "Strategy.gs"]
+LOGIC_FILES = ["Config.gs", "Quotes.gs", "Portfolio.gs", "Analytics.gs",
+               "Strategy.gs", "Transactions.gs"]
 
 MOCK = """
 <script>
 /* ---- mock server layer: fixtures + the real logic above ---- */
-var MOCK_POSITIONS = [
-  // Generic demo fixtures - this repo is public, so they deliberately do not
-  // mirror anyone's real holdings. They exist to exercise every code path:
-  // profitable mega-cap, high-Taiwan semi, unprofitable speculative, and a
-  // broken ticker with an ILS cost basis.
+var MOCK_TRANSACTIONS = [
+  // Generic demo fixtures - the repo is public, so these deliberately do not
+  // mirror anyone's real holdings. They exercise every ledger path: a simple
+  // buy, a buy-more that must average correctly, a partial sale with realised
+  // gain, a fully closed position, and a broken ticker with an ILS basis.
   //
-  // INTC is the hand-checkable case: 10 @ $100 cost, $122 price
+  // INTC is the hand-checkable case: 10 @ $100, price $122
   // => value 1220, P&L +220, +22.0%
-  {ticker:'INTC', shares:10,  avgCost:100, costCurrency:'USD', buyDate:'2026-01-15', riskTag:'growth',      notes:'foundry turnaround'},
-  {ticker:'MSFT', shares:4,   avgCost:380, costCurrency:'USD', buyDate:'2025-06-02', riskTag:'core',        notes:''},
-  {ticker:'NVDA', shares:9,   avgCost:120, costCurrency:'USD', buyDate:'2025-11-20', riskTag:'growth',      notes:''},
-  {ticker:'IONQ', shares:150, avgCost:9,   costCurrency:'USD', buyDate:'2026-03-01', riskTag:'speculative', notes:''},
-  // Junk ticker on purpose: exercises the stale-data fallback and ILS cost basis.
-  {ticker:'ZZZZ', shares:5,   avgCost:50,  costCurrency:'ILS', buyDate:'2026-02-01', riskTag:'speculative', notes:'broken on purpose'}
+  {date:'2026-01-15', ticker:'INTC', type:'BUY',  shares:10,  price:100, currency:'USD', fees:0, notes:'foundry turnaround'},
+  {date:'2025-06-02', ticker:'MSFT', type:'BUY',  shares:2,   price:360, currency:'USD', fees:0, notes:''},
+  {date:'2026-04-10', ticker:'MSFT', type:'BUY',  shares:2,   price:400, currency:'USD', fees:0, notes:'added on the dip'},
+  {date:'2025-11-20', ticker:'NVDA', type:'BUY',  shares:12,  price:120, currency:'USD', fees:0, notes:''},
+  {date:'2026-08-01', ticker:'NVDA', type:'SELL', shares:3,   price:190, currency:'USD', fees:5, notes:'trimmed to band'},
+  {date:'2026-03-01', ticker:'IONQ', type:'BUY',  shares:150, price:9,   currency:'USD', fees:0, notes:''},
+  {date:'2026-02-01', ticker:'ZZZZ', type:'BUY',  shares:5,   price:50,  currency:'ILS', fees:0, notes:'broken on purpose'},
+  // Bought and fully sold - should appear under closed positions only.
+  {date:'2025-09-01', ticker:'AMD',  type:'BUY',  shares:10,  price:150, currency:'USD', fees:0, notes:''},
+  {date:'2026-05-15', ticker:'AMD',  type:'SELL', shares:10,  price:120, currency:'USD', fees:8, notes:'thesis broke'}
 ];
 
+var MOCK_META = {
+  INTC: {riskTag:'growth',      notes:'18A turnaround'},
+  MSFT: {riskTag:'core',        notes:''},
+  NVDA: {riskTag:'growth',      notes:''},
+  IONQ: {riskTag:'speculative', notes:''},
+  ZZZZ: {riskTag:'speculative', notes:'broken on purpose'},
+  AMD:  {riskTag:'growth',      notes:''}
+};
+
 var MOCK_WATCHLIST = [
-  {ticker:'TSM',  addedDate:'2026-09-01', thesis:'The chokepoint',    targetEntry:200},
-  {ticker:'AMD',  addedDate:'2026-09-01', thesis:'',                  targetEntry:140},
-  {ticker:'AVGO', addedDate:'2026-09-10', thesis:'Custom silicon',    targetEntry:null}
+  {ticker:'TSM',  addedDate:'2026-09-01', thesis:'The chokepoint', targetEntry:200},
+  {ticker:'AVGO', addedDate:'2026-09-10', thesis:'Custom silicon', targetEntry:null}
 ];
 
 var MOCK_QUOTES = {
@@ -59,16 +72,24 @@ var MOCK_QUOTES = {
 var MOCK_USDILS = 3.72;
 var mockSettings = {displayCurrency:'USD', drawdownTolerance:0.50, maxSinglePositionPct:0.25, maxTop3Pct:0.60};
 
+function mockPositions() {
+  return derivePositions_(MOCK_TRANSACTIONS, MOCK_META);
+}
+
 function mockDashboard() {
   var t0 = Date.now();
   var quotes = JSON.parse(JSON.stringify(MOCK_QUOTES));
-  var pf = computePortfolio_(MOCK_POSITIONS, quotes, MOCK_USDILS, mockSettings.displayCurrency);
+  var positions = mockPositions();
+  var pf = computePortfolio_(positions, quotes, MOCK_USDILS, mockSettings.displayCurrency);
   var wl = computeWatchlist_(MOCK_WATCHLIST, quotes, MOCK_USDILS, mockSettings.displayCurrency);
   var analytics = computeAnalytics_(pf.rows, mockSettings);
   return {
     positions: pf.rows, totals: pf.totals, watchlist: wl, analytics: analytics,
+    closedPositions: getClosedPositions_(MOCK_TRANSACTIONS),
+    realisedTotal: totalRealised_(MOCK_TRANSACTIONS),
+    transactions: MOCK_TRANSACTIONS.slice().reverse(),
     settings: mockSettings, usdIls: MOCK_USDILS, riskTags: RISK_TAGS,
-    fetchedAt: '2026-09-22 12:30 (MOCK)', elapsedMs: Date.now() - t0
+    fetchedAt: '2026-09-23 10:00 (MOCK)', elapsedMs: Date.now() - t0
   };
 }
 
@@ -89,80 +110,67 @@ window.google = { script: { run: (function () {
         if (!MOCK_QUOTES[t] && !p.force) {
           return fail({message:'GOOGLEFINANCE has no price for ' + t + '. It may be a very recent listing.'});
         }
-        var list = p.list === 'positions' ? MOCK_POSITIONS : MOCK_WATCHLIST;
-        if (list.some(function (r) { return r.ticker === t; })) {
-          return fail({message: t + ' is already in your ' + (p.list === 'positions' ? 'portfolio' : 'watchlist') + '.'});
-        }
         if (!MOCK_QUOTES[t]) {
           MOCK_QUOTES[t] = {ticker:t, name:null, price:null, changepct:null, high52:null,
                             low52:null, pe:null, eps:null, marketcap:null, beta:null,
                             currency:null, stale:true};
         }
         if (p.list === 'positions') {
-          MOCK_POSITIONS.push({ticker:t, shares:Number(p.shares), avgCost:Number(p.avgCost),
-            costCurrency:p.costCurrency, buyDate:'2026-09-22',
-            riskTag:p.riskTag || 'growth', notes:p.notes || ''});
+          if (mockPositions().some(function (x) { return x.ticker === t; })) {
+            return fail({message: t + ' is already in your portfolio.'});
+          }
+          MOCK_TRANSACTIONS.push({date:'2026-09-23', ticker:t, type:'BUY',
+            shares:Number(p.shares), price:Number(p.avgCost),
+            currency:p.costCurrency || 'USD', fees:0, notes:p.notes || ''});
+          MOCK_META[t] = {riskTag:p.riskTag || 'growth', notes:p.notes || ''};
         } else {
-          MOCK_WATCHLIST.push({ticker:t, addedDate:'2026-09-22', thesis:p.thesis || '',
+          if (MOCK_WATCHLIST.some(function (r) { return r.ticker === t; })) {
+            return fail({message: t + ' is already in your watchlist.'});
+          }
+          MOCK_WATCHLIST.push({ticker:t, addedDate:'2026-09-23', thesis:p.thesis || '',
             targetEntry:p.targetEntry ? Number(p.targetEntry) : null});
         }
         ok(mockDashboard());
       }, 150);
     },
-    getStrategyData: function () {
+    recordTransaction: function (p) {
       setTimeout(function () {
-        // Fabricated Finnhub-shaped metrics, run through the REAL scoreStock_.
-        var fake = {
-          INTC: {'roiTTM':8.1,'grossMarginTTM':38.2,'operatingMarginTTM':9.4,
-                 'totalDebt/totalEquityQuarterly':0.52,'currentRatioQuarterly':1.6,
-                 'netProfitMarginTTM':6.2,'revenueGrowth3Y':4.1,'revenueGrowth5Y':1.8,
-                 'epsGrowth3Y':-12.0,'peTTM':41.2,'pfcfShareTTM':38.0,'psTTM':3.1},
-          MSFT: {'roiTTM':28.4,'grossMarginTTM':69.1,'operatingMarginTTM':44.2,
-                 'totalDebt/totalEquityQuarterly':0.28,'currentRatioQuarterly':1.3,
-                 'netProfitMarginTTM':35.6,'revenueGrowth3Y':14.2,'revenueGrowth5Y':15.1,
-                 'epsGrowth3Y':16.4,'peTTM':36.0,'pfcfShareTTM':41.0,'psTTM':13.2},
-          NVDA: {'roiTTM':62.0,'grossMarginTTM':74.5,'operatingMarginTTM':61.2,
-                 'totalDebt/totalEquityQuarterly':0.12,'currentRatioQuarterly':4.1,
-                 'netProfitMarginTTM':55.8,'revenueGrowth3Y':68.0,'revenueGrowth5Y':52.0,
-                 'epsGrowth3Y':78.0,'peTTM':52.3,'pfcfShareTTM':58.0,'psTTM':28.4},
-          IONQ: {'roiTTM':-41.2,'grossMarginTTM':42.0,'operatingMarginTTM':-180.0,
-                 'totalDebt/totalEquityQuarterly':0.05,'currentRatioQuarterly':6.2,
-                 'netProfitMarginTTM':-210.0,'revenueGrowth3Y':84.0,'revenueGrowth5Y':null,
-                 'epsGrowth3Y':null,'peTTM':-31.4,'pfcfShareTTM':-22.0,'psTTM':64.0},
-          TSM:  {'roiTTM':22.1,'grossMarginTTM':53.2,'operatingMarginTTM':42.6,
-                 'totalDebt/totalEquityQuarterly':0.24,'currentRatioQuarterly':2.4,
-                 'netProfitMarginTTM':38.9,'revenueGrowth3Y':18.2,'revenueGrowth5Y':16.4,
-                 'epsGrowth3Y':21.0,'peTTM':31.8,'pfcfShareTTM':29.0,'psTTM':11.2},
-          AMD:  {'roiTTM':4.2,'grossMarginTTM':49.1},   // deliberately sparse -> low coverage
-          AVGO: {'roiTTM':18.4,'grossMarginTTM':63.2,'operatingMarginTTM':38.1,
-                 'totalDebt/totalEquityQuarterly':1.42,'currentRatioQuarterly':1.1,
-                 'netProfitMarginTTM':24.1,'revenueGrowth3Y':22.0,'revenueGrowth5Y':17.5,
-                 'epsGrowth3Y':19.0,'peTTM':44.2,'pfcfShareTTM':33.0,'psTTM':18.9},
-          ZZZZ: null
-        };
-        var held = {};
-        MOCK_POSITIONS.forEach(function (p) { held[p.ticker] = true; });
-        var tickers = Object.keys(fake);
-        var rows = tickers.map(function (t) {
-          var r = scoreStock_(t, fake[t]);
-          r.held = !!held[t];
-          r.fetchError = fake[t] ? '' : 'no_data';
-          return r;
-        }).sort(function (a, b) {
-          if (a.total === null) return 1;
-          if (b.total === null) return -1;
-          return b.total - a.total;
+        var t = normalizeTicker(p.ticker);
+        var shares = Number(p.shares);
+        var price = Number(p.price);
+        if (!isFinite(shares) || shares <= 0) return fail({message:'Shares must be a positive number.'});
+        if (!isFinite(price) || price < 0) return fail({message:'Price must be zero or more.'});
+
+        if (String(p.type).toUpperCase() === 'SELL') {
+          var held = mockPositions().filter(function (x) { return x.ticker === t; })[0];
+          if (!held) return fail({message:'You do not hold ' + t + ', so there is nothing to sell.'});
+          if (shares > held.shares + 1e-9) {
+            return fail({message:'You hold ' + held.shares + ' ' + t + ', so ' + shares + ' cannot be sold.'});
+          }
+        }
+        MOCK_TRANSACTIONS.push({
+          date: p.date || '2026-09-23', ticker: t,
+          type: String(p.type).toUpperCase() === 'SELL' ? 'SELL' : 'BUY',
+          shares: shares, price: price, currency: p.currency || 'USD',
+          fees: Number(p.fees) || 0, notes: p.notes || ''
         });
-        ok({needsKey:false, empty:false, rows:rows, weights:STRATEGY_WEIGHTS,
-            minCoverage:MIN_COVERAGE, fetchedAt:'2026-09-23 10:00 (MOCK)', elapsedMs:820});
-      }, 200);
+        ok(mockDashboard());
+      }, 150);
     },
     removeHolding: function (list, ticker) {
       setTimeout(function () {
-        var arr = list === 'positions' ? MOCK_POSITIONS : MOCK_WATCHLIST;
-        var i = arr.findIndex(function (r) { return r.ticker === ticker; });
-        if (i === -1) return fail({message: ticker + ' was not found.'});
-        arr.splice(i, 1);
+        if (list === 'positions') {
+          var before = MOCK_TRANSACTIONS.length;
+          for (var i = MOCK_TRANSACTIONS.length - 1; i >= 0; i--) {
+            if (MOCK_TRANSACTIONS[i].ticker === ticker) MOCK_TRANSACTIONS.splice(i, 1);
+          }
+          delete MOCK_META[ticker];
+          if (before === MOCK_TRANSACTIONS.length) return fail({message: ticker + ' was not found.'});
+        } else {
+          var j = MOCK_WATCHLIST.findIndex(function (r) { return r.ticker === ticker; });
+          if (j === -1) return fail({message: ticker + ' was not found.'});
+          MOCK_WATCHLIST.splice(j, 1);
+        }
         ok(mockDashboard());
       }, 120);
     }

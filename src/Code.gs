@@ -48,9 +48,15 @@ function getDashboardData() {
     });
   }
 
+  var closed = getClosedPositions_();
+  var realised = totalRealised_();
+
   return {
     positions: pf.rows,
     totals: pf.totals,
+    closedPositions: closed,
+    realisedTotal: realised,
+    transactions: getTransactions_().slice().reverse(),
     watchlist: wl,
     analytics: analytics,
     settings: settings,
@@ -116,21 +122,12 @@ function addHolding(p) {
   }
 
   if (list === 'positions') {
-    var shares = Number(p.shares);
-    var avgCost = Number(p.avgCost);
-    if (!isFinite(shares) || shares <= 0) throw new Error('Shares must be a positive number.');
-    if (!isFinite(avgCost) || avgCost < 0) throw new Error('Average cost must be zero or more.');
-    var tag = String(p.riskTag || '').toLowerCase();
-
-    appendRow_(SHEETS.POSITIONS, HEADERS.POSITIONS, {
-      ticker: ticker,
-      shares: shares,
-      avgCost: avgCost,
-      costCurrency: String(p.costCurrency).toUpperCase() === 'ILS' ? 'ILS' : 'USD',
-      buyDate: p.buyDate || todayKey_(),
-      riskTag: RISK_TAGS[tag] ? tag : (SUGGESTED_RISK_TAG[ticker] || DEFAULT_RISK_TAG),
-      notes: String(p.notes || '')
+    recordTransaction({
+      ticker: ticker, type: TX_BUY, shares: p.shares, price: p.avgCost,
+      currency: p.costCurrency, fees: p.fees, date: p.buyDate,
+      riskTag: p.riskTag, notes: p.notes, force: true
     });
+    return getDashboardData();
   } else {
     appendRow_(SHEETS.WATCHLIST, HEADERS.WATCHLIST, {
       ticker: ticker,
@@ -143,19 +140,94 @@ function addHolding(p) {
   return getDashboardData();
 }
 
-function removeHolding(list, ticker) {
-  var t = normalizeTicker(ticker);
-  var tab = (list === 'positions') ? SHEETS.POSITIONS : SHEETS.WATCHLIST;
-  if (!deleteByTicker_(tab, t)) throw new Error(t + ' was not found.');
+
+/**
+ * Record a buy or sell.
+ *
+ * This is how the portfolio changes now - positions are derived from the
+ * ledger rather than edited in place, so "buy more" is just another BUY and
+ * the average cost recomputes itself.
+ */
+function recordTransaction(p) {
+  p = p || {};
+  var ticker = normalizeTicker(p.ticker);
+  if (!ticker) throw new Error('Ticker is required.');
+
+  var type = String(p.type || '').toUpperCase() === TX_SELL ? TX_SELL : TX_BUY;
+  var shares = Number(p.shares);
+  var price = Number(p.price);
+  var fees = Number(p.fees) || 0;
+
+  if (!isFinite(shares) || shares <= 0) throw new Error('Shares must be a positive number.');
+  if (!isFinite(price) || price < 0) throw new Error('Price must be zero or more.');
+  if (!isFinite(fees) || fees < 0) throw new Error('Fees cannot be negative.');
+
+  if (type === TX_BUY && !p.force) {
+    var check = validateTicker(ticker);
+    if (!check.valid) throw new Error(check.reason);
+  }
+
+  if (type === TX_SELL) {
+    var held = getPositions_().filter(function (x) { return x.ticker === ticker; })[0];
+    if (!held) throw new Error('You do not hold ' + ticker + ', so there is nothing to sell.');
+    if (shares > held.shares + 1e-9) {
+      throw new Error('You hold ' + held.shares + ' ' + ticker +
+                      ', so ' + shares + ' cannot be sold.');
+    }
+  }
+
+  addTransaction_({
+    date: p.date || todayKey_(),
+    ticker: ticker,
+    type: type,
+    shares: shares,
+    price: price,
+    currency: String(p.currency).toUpperCase() === 'ILS' ? 'ILS' : 'USD',
+    fees: fees,
+    notes: String(p.notes || '')
+  });
+
+  // Keep the holding's metadata row in step, without clobbering existing notes.
+  if (type === TX_BUY) {
+    var meta = getHoldingMeta_();
+    if (!meta[ticker]) {
+      var tag = String(p.riskTag || '').toLowerCase();
+      appendRow_(SHEETS.POSITIONS, HEADERS.POSITIONS, {
+        ticker: ticker,
+        riskTag: RISK_TAGS[tag] ? tag : (SUGGESTED_RISK_TAG[ticker] || DEFAULT_RISK_TAG),
+        notes: String(p.notes || '')
+      });
+    }
+  }
+
   return getDashboardData();
 }
 
-/** Move a watchlist entry into the portfolio. */
-function promoteToPortfolio(ticker, shares, avgCost, costCurrency, riskTag) {
+/** Remove a holding and its whole trade history. Destructive on purpose. */
+function deleteHoldingHistory(ticker) {
   var t = normalizeTicker(ticker);
-  var res = addHolding({
-    list: 'positions', ticker: t, shares: shares, avgCost: avgCost,
-    costCurrency: costCurrency, riskTag: riskTag, force: true
+  var removed = 0;
+  while (deleteByTicker_(SHEETS.TRANSACTIONS, t)) { removed++; }
+  deleteByTicker_(SHEETS.POSITIONS, t);
+  if (!removed) throw new Error('No transactions found for ' + t + '.');
+  return getDashboardData();
+}
+
+function removeHolding(list, ticker) {
+  var t = normalizeTicker(ticker);
+  // A position is now the sum of its trades, so removing it means removing
+  // them - deleting only the metadata row would leave the holding intact.
+  if (list === 'positions') return deleteHoldingHistory(t);
+  if (!deleteByTicker_(SHEETS.WATCHLIST, t)) throw new Error(t + ' was not found.');
+  return getDashboardData();
+}
+
+/** Move a watchlist entry into the portfolio by recording the opening buy. */
+function promoteToPortfolio(ticker, shares, price, currency, riskTag) {
+  var t = normalizeTicker(ticker);
+  recordTransaction({
+    ticker: t, type: TX_BUY, shares: shares, price: price,
+    currency: currency, riskTag: riskTag, force: true
   });
   deleteByTicker_(SHEETS.WATCHLIST, t);
   return getDashboardData();

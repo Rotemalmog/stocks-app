@@ -33,6 +33,10 @@
         <div class="hero-label">Cost basis</div>
         <div class="stat-value" id="heroCost">—</div>
       </div>
+      <div class="stat" id="heroRealisedWrap">
+        <div class="hero-label">Realised</div>
+        <div class="stat-value" id="heroRealised">—</div>
+      </div>
     </div>
   </header>
 
@@ -52,6 +56,7 @@
     <button class="tab" role="tab" aria-selected="false" data-panel="wl">Watchlist</button>
     <button class="tab" role="tab" aria-selected="false" data-panel="rk">Risk</button>
     <button class="tab" role="tab" aria-selected="false" data-panel="st">Strategy</button>
+    <button class="tab" role="tab" aria-selected="false" data-panel="tx">Trades</button>
   </div>
 
   <!-- ---------------- positions ---------------- -->
@@ -80,7 +85,7 @@
             <tr>
               <th>Ticker</th><th>Shares</th><th>Avg cost</th><th>Price</th>
               <th>Today</th><th>Value</th><th>P&amp;L</th><th>P&amp;L %</th>
-              <th>Weight</th><th>Tag</th><th></th>
+              <th>Weight</th><th>Tag</th><th>Actions</th>
             </tr>
           </thead>
           <tbody id="pfBody"></tbody>
@@ -219,6 +224,42 @@
     </div>
   </section>
 
+
+  <!-- ---------------- trades ---------------- -->
+  <section id="panel-tx" class="hidden">
+    <div class="card" style="margin-top:16px">
+      <h2>Trade history</h2>
+      <div class="sub">
+        Every buy and sell. Positions are derived from this ledger, so average
+        cost can never drift out of step with what you actually did.
+      </div>
+      <div style="overflow-x:auto">
+        <table>
+          <thead>
+            <tr>
+              <th>Date</th><th>Ticker</th><th>Type</th><th>Shares</th>
+              <th>Price</th><th>Fees</th><th>Value</th><th>Notes</th>
+            </tr>
+          </thead>
+          <tbody id="txBody"></tbody>
+        </table>
+      </div>
+      <div class="empty hidden" id="txEmpty">
+        No trades recorded yet. Use <strong>+ Add stock</strong> to record your first buy.
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Closed positions</h2>
+      <div class="sub">Holdings sold down to zero, kept for the realised-gains record.</div>
+      <table>
+        <thead><tr><th>Ticker</th><th>Closed</th><th>Trades</th><th>Realised</th></tr></thead>
+        <tbody id="closedBody"></tbody>
+      </table>
+      <div class="empty hidden" id="closedEmpty">Nothing closed yet.</div>
+    </div>
+  </section>
+
   <section id="alerts" class="hidden">
     <h2 class="alerts-title">Alerts</h2>
     <div id="notices"></div>
@@ -301,6 +342,60 @@
     <div class="modal-actions">
       <button id="btnCancel">Cancel</button>
       <button class="btn-primary" id="btnSave">Add</button>
+    </div>
+  </div>
+</div>
+
+
+<!-- ---------------- buy / sell modal ---------------- -->
+<div class="overlay hidden" id="txOverlay">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="txTitle">
+    <h2 id="txTitle">Record a trade</h2>
+    <div class="sub" id="txHolding"></div>
+
+    <div class="field">
+      <label>Type</label>
+      <div class="seg" role="group">
+        <button id="txBuy" aria-pressed="true">Buy</button>
+        <button id="txSell" aria-pressed="false">Sell</button>
+      </div>
+    </div>
+
+    <div class="row2">
+      <div class="field">
+        <label for="txShares">Shares</label>
+        <input id="txShares" type="number" step="any" min="0" placeholder="10">
+      </div>
+      <div class="field">
+        <label for="txPrice">Price per share</label>
+        <input id="txPrice" type="number" step="any" min="0" placeholder="122">
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label for="txCcy">Currency</label>
+        <select id="txCcy"><option>USD</option><option>ILS</option></select>
+      </div>
+      <div class="field">
+        <label for="txFees">Fees (optional)</label>
+        <input id="txFees" type="number" step="any" min="0" placeholder="0">
+      </div>
+    </div>
+    <div class="row2">
+      <div class="field">
+        <label for="txDate">Date</label>
+        <input id="txDate" type="date">
+      </div>
+      <div class="field">
+        <label for="txNotes">Note (optional)</label>
+        <input id="txNotes" placeholder="why">
+      </div>
+    </div>
+
+    <div id="txMsg"></div>
+    <div class="modal-actions">
+      <button id="txCancel">Cancel</button>
+      <button class="btn-primary" id="txSave">Record trade</button>
     </div>
   </div>
 </div>
